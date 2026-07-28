@@ -1,5 +1,5 @@
 from django_filters import FilterSet
-from .models import Car, Auction, Bid
+from .models import Car, Rental
 
 
 class CarFilter(FilterSet):
@@ -11,31 +11,21 @@ class CarFilter(FilterSet):
             'year': ['exact', 'gt', 'lt'],
             'fuel_type': ['exact'],
             'transmission': ['exact'],
-            'condition': ['exact'],
             'mileage': ['exact', 'lte', 'gte'],
-            'price': ['exact', 'gte', 'lte'],
+            'price_per_day': ['exact', 'gte', 'lte'],
             'is_available': ['exact'],
-            'seller': ['exact'],
+            'owner': ['exact'],
+            'location': ['exact', 'icontains'],
         }
 
 
-class AuctionFilter(FilterSet):
+class RentalFilter(FilterSet):
     class Meta:
-        model = Auction
+        model = Rental
         fields = {
             'status': ['exact'],
-            'car__brand': ['exact', 'icontains'],
-            'car__model_name': ['exact', 'icontains'],
-            'start_price': ['gte', 'lte'],
-            'end_time': ['gte', 'lte'],
-        }
-
-
-class BidFilter(FilterSet):
-    class Meta:
-        model = Bid
-        fields = {
-            'auction': ['exact'],
-            'buyer': ['exact'],
-            'amount': ['gte', 'lte'],
+            'car': ['exact'],
+            'renter': ['exact'],
+            'start_date': ['exact', 'gte', 'lte'],
+            'end_date': ['exact', 'gte', 'lte'],
         }
