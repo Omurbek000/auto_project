@@ -73,7 +73,7 @@ class CarListAPIView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         if self.request.user.role != 'owner':
-            return Response({'detail': 'Только владельцы могут создавать автомобили'}, status=status.HTTP_403_FORBIDDEN)
+            raise permissions.PermissionDenied('Только владельцы могут создавать автомобили')
         serializer.save(owner=self.request.user)
 
 
@@ -416,12 +416,10 @@ class SendVerificationCodeAPIView(generics.GenericAPIView):
             expires_at=expires_at
         )
 
-        # TODO: Отправить код на email или телефон
-        # Сейчас просто возвращаем код (для тестирования)
+        # TODO: Отправить код на email или телефон (пока не реализовано)
 
         return Response({
-            'message': f'Код верификации отправлен на {verification_type}',
-            'code': code  # Убрать в продакшене!
+            'message': f'Код верификации отправлен на {verification_type}'
         }, status=status.HTTP_200_OK)
 
 
