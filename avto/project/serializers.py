@@ -1,33 +1,43 @@
+# Сериализаторы — преобразуют данные между Python/БД и JSON (API)
+# Валидируют входящие данные, определяют какие поля отдавать клиенту
+
 from rest_framework import serializers
 from .models import *
 from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import date
 
 
+# Сериализатор регистрации нового пользователя
+# Принимает: username, email, password, phone_number, is_owner
+# Создаёт пользователя в БД с захэшированным паролем
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'phone_number', 'role')
-        extra_kwargs = {'password': {'write_only': True}}
+        fields = ('username', 'email', 'password', 'phone_number', 'is_owner')
+        extra_kwargs = {'password': {'write_only': True}}  # Пароль только на вход, никогда не возвращается
 
     def validate_email(self, value):
+        # Проверка: email не должен быть занят
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError('Пользователь с таким email уже существует')
         return value
 
     def create(self, validated_data):
+        # Создание пользователя с правильным хэшированием пароля
         password = validated_data.pop('password')
         user = User(**validated_data)
-        user.set_password(password)
+        user.set_password(password)  # Хэширует пароль (не хранит в открытом виде)
         user.save()
         return user
 
 
+# Сериализатор логина. Проверяет логин/пароль, возвращает JWT-токены
 class CustomLoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
+        # Поиск пользователя и проверка пароля
         username = data.get('username')
         password = data.get('password')
 
@@ -43,6 +53,7 @@ class CustomLoginSerializer(serializers.Serializer):
         return data
 
     def to_representation(self, instance):
+        # Формирование ответа с JWT-токенами
         user = self.context['user']
         refresh = RefreshToken.for_user(user)
 
@@ -51,26 +62,31 @@ class CustomLoginSerializer(serializers.Serializer):
                 'id': user.id,
                 'username': user.username,
                 'email': user.email,
-                'role': user.role,
+                'is_owner': user.is_owner,
+                'is_renter': user.is_renter,
             },
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
+            'access': str(refresh.access_token),   # Токен доступа (короткоживущий)
+            'refresh': str(refresh),               # Токен обновления (долгоживущий)
         }
 
 
+# Сериализатор логаута. Принимает refresh-токен и проверяет его валидность
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField()
 
     def validate(self, attrs):
         token = attrs.get('refresh')
         try:
-            RefreshToken(token)
+            RefreshToken(token)  # Просто проверяем что токен валидный
         except Exception:
             raise serializers.ValidationError({'refresh': 'Невалидный токен'})
         return attrs
 
 
+# Сериализатор профиля пользователя (детальная информация)
+# Показывает рейтинги, возраст, стаж — вычисляемые поля
 class UserSerializer(serializers.ModelSerializer):
+    # ReadOnlyField — поле только для чтения, клиент не может его изменить
     renter_rating = serializers.ReadOnlyField()
     renter_rating_count = serializers.ReadOnlyField()
     owner_rating = serializers.ReadOnlyField()
@@ -82,102 +98,75 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'first_name', 'last_name', 'email', 'phone_number',
-            'role', 'avatar', 'bio', 'date_of_birth', 'age', 'driving_license_number',
-            'driving_license_date', 'driving_experience', 'languages', 'email_verified',
-            'phone_verified', 'is_verified', 'renter_rating', 'renter_rating_count',
-            'owner_rating', 'owner_rating_count', 'created_date'
+            'is_owner', 'is_renter', 'avatar', 'bio', 'date_of_birth', 'age',
+            'driving_license_number', 'driving_license_date', 'driving_experience',
+            'languages', 'email_verified', 'phone_verified', 'is_verified',
+            'renter_rating', 'renter_rating_count', 'owner_rating', 'owner_rating_count',
+            'created_date'
         ]
 
 
+# Сериализатор изображений автомобиля
 class CarImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = CarImage
         fields = ['id', 'image', 'created_date']
 
 
+# Сериализатор заблокированных дат (владелец вручную блокирует дни)
 class CarUnavailableDateSerializer(serializers.ModelSerializer):
     class Meta:
         model = CarUnavailableDate
         fields = ['id', 'start_date', 'end_date', 'reason', 'created_date']
 
 
+# Сериализатор для списка автомобилей (краткая информация)
 class CarListSerializer(serializers.ModelSerializer):
-    owner = UserSerializer(read_only=True)
-    owner_id = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.filter(role='owner'),
+    owner = UserSerializer(read_only=True)                                               # Информация о владельце (только чтение)
+    owner_id = serializers.PrimaryKeyRelatedField(                                      # ID владельца (только запись)
+        queryset=User.objects.all(),
         write_only=True,
         source='owner',
     )
-    average_rating = serializers.ReadOnlyField()
-    feedbacks_count = serializers.ReadOnlyField()
-    images = CarImageSerializer(many=True, read_only=True)
+    average_rating = serializers.ReadOnlyField()                                        # Средний рейтинг
+    feedbacks_count = serializers.ReadOnlyField()                                       # Количество отзывов
+    images = CarImageSerializer(many=True, read_only=True)                              # Доп. фото
 
     class Meta:
         model = Car
         fields = [
-            'id',
-            'brand',
-            'model_name',
-            'year',
-            'fuel_type',
-            'transmission',
-            'mileage',
-            'price_per_day',
-            'location',
-            'image',
-            'images',
-            'owner',
-            'owner_id',
-            'is_available',
-            'average_rating',
-            'feedbacks_count',
-            'min_age',
-            'min_driving_experience',
-            'deposit',
-            'created_date',
+            'id', 'brand', 'model_name', 'year', 'fuel_type', 'transmission',
+            'mileage', 'price_per_day', 'location', 'image', 'images',
+            'owner', 'owner_id', 'is_available', 'average_rating', 'feedbacks_count',
+            'min_age', 'min_driving_experience', 'deposit', 'created_date',
         ]
-        read_only_fields = ['owner']
+        read_only_fields = ['owner']  # Владелец автоматически проставляется из запроса
 
 
+# Сериализатор для детальной страницы автомобиля
 class CarDetailSerializer(serializers.ModelSerializer):
     owner = UserSerializer(read_only=True)
     average_rating = serializers.ReadOnlyField()
     feedbacks_count = serializers.ReadOnlyField()
     images = CarImageSerializer(many=True, read_only=True)
-    unavailable_dates = CarUnavailableDateSerializer(many=True, read_only=True)
+    unavailable_dates = CarUnavailableDateSerializer(many=True, read_only=True)  # Заблокированные даты
 
     class Meta:
         model = Car
         fields = [
-            'id',
-            'brand',
-            'model_name',
-            'year',
-            'fuel_type',
-            'transmission',
-            'mileage',
-            'price_per_day',
-            'description',
-            'location',
-            'image',
-            'images',
-            'unavailable_dates',
-            'owner',
-            'is_available',
-            'average_rating',
-            'feedbacks_count',
-            'min_age',
-            'min_driving_experience',
-            'deposit',
-            'cancellation_policy',
-            'created_date',
+            'id', 'brand', 'model_name', 'year', 'fuel_type', 'transmission',
+            'mileage', 'price_per_day', 'description', 'location', 'image',
+            'images', 'unavailable_dates', 'owner', 'is_available',
+            'average_rating', 'feedbacks_count', 'min_age', 'min_driving_experience',
+            'deposit', 'cancellation_policy', 'created_date',
         ]
 
 
+# Сериализатор аренды (создание и список)
 class RentalListSerializer(serializers.ModelSerializer):
-    car = CarListSerializer(read_only=True)
-    renter = UserSerializer(read_only=True)
-    car_id = serializers.PrimaryKeyRelatedField(
+    car = CarListSerializer(read_only=True)                                      # Данные о машине
+    renter = UserSerializer(read_only=True)                                      # Данные об арендаторе
+    car_id = serializers.PrimaryKeyRelatedField(                                 # ID машины (только запись)
         queryset=Car.objects.filter(is_available=True),
         write_only=True,
         source='car',
@@ -186,42 +175,35 @@ class RentalListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Rental
         fields = [
-            'id',
-            'car',
-            'car_id',
-            'renter',
-            'start_date',
-            'end_date',
-            'total_price',
-            'status',
-            'created_date',
+            'id', 'car', 'car_id', 'renter',
+            'start_date', 'end_date', 'total_price', 'status', 'created_date',
         ]
-        read_only_fields = ['renter', 'total_price', 'status']
+        read_only_fields = ['renter', 'total_price', 'status']  # Проставляются автоматически
 
     def validate(self, data):
+        # Проверка дат и доступности автомобиля
         start = data.get('start_date')
         end = data.get('end_date')
         car = data.get('car')
 
         if start and end:
+            # Дата начала не может быть в прошлом
             if start < date.today():
                 raise serializers.ValidationError(
                     {'start_date': 'Дата начала не может быть в прошлом'}
                 )
+            # Дата окончания должна быть позже даты начала
             if end <= start:
                 raise serializers.ValidationError(
                     {'end_date': 'Дата окончания должна быть после даты начала'}
                 )
 
             if car:
+                # Проверка пересечения с другими арендами
                 overlapping_rentals = Rental.objects.filter(
                     car=car,
                     status__in=['pending', 'confirmed', 'active']
-                ).exclude(
-                    end_date__lt=start
-                ).exclude(
-                    start_date__gt=end
-                )
+                ).exclude(end_date__lt=start).exclude(start_date__gt=end)
 
                 if self.instance:
                     overlapping_rentals = overlapping_rentals.exclude(id=self.instance.id)
@@ -231,13 +213,9 @@ class RentalListSerializer(serializers.ModelSerializer):
                         {'car': 'Автомобиль уже забронирован на выбранные даты'}
                     )
 
-                unavailable_dates = CarUnavailableDate.objects.filter(
-                    car=car
-                ).exclude(
-                    end_date__lt=start
-                ).exclude(
-                    start_date__gt=end
-                )
+                # Проверка пересечения с заблокированными владельцем датами
+                unavailable_dates = CarUnavailableDate.objects.filter(car=car
+                ).exclude(end_date__lt=start).exclude(start_date__gt=end)
 
                 if unavailable_dates.exists():
                     raise serializers.ValidationError(
@@ -247,6 +225,7 @@ class RentalListSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
+        # Автоматический расчёт итоговой цены: цена_за_день * количество_дней
         car = validated_data['car']
         start = validated_data['start_date']
         end = validated_data['end_date']
@@ -255,6 +234,7 @@ class RentalListSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+# Сериализатор для детальной страницы аренды
 class RentalDetailSerializer(serializers.ModelSerializer):
     car = CarDetailSerializer(read_only=True)
     renter = UserSerializer(read_only=True)
@@ -262,21 +242,16 @@ class RentalDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Rental
         fields = [
-            'id',
-            'car',
-            'renter',
-            'start_date',
-            'end_date',
-            'total_price',
-            'status',
-            'created_date',
+            'id', 'car', 'renter',
+            'start_date', 'end_date', 'total_price', 'status', 'created_date',
         ]
 
 
+# Сериализатор отзыва
 class FeedbackSerializer(serializers.ModelSerializer):
     rental = RentalListSerializer(read_only=True)
     author = UserSerializer(read_only=True)
-    rental_id = serializers.PrimaryKeyRelatedField(
+    rental_id = serializers.PrimaryKeyRelatedField(  # ID аренды (только запись)
         queryset=Rental.objects.all(),
         write_only=True,
         source='rental',
@@ -285,18 +260,13 @@ class FeedbackSerializer(serializers.ModelSerializer):
     class Meta:
         model = Feedback
         fields = [
-            'id',
-            'rental',
-            'rental_id',
-            'feedback_type',
-            'author',
-            'rating',
-            'comment',
-            'created_date',
+            'id', 'rental', 'rental_id', 'feedback_type',
+            'author', 'rating', 'comment', 'created_date',
         ]
         read_only_fields = ['author']
 
     def validate(self, data):
+        # Проверка: отзыв только для завершённой аренды, и только участник может писать
         request = self.context.get('request')
         rental = data.get('rental')
         feedback_type = data.get('feedback_type')
@@ -313,6 +283,7 @@ class FeedbackSerializer(serializers.ModelSerializer):
         else:
             raise serializers.ValidationError('Неверный тип отзыва')
 
+        # Проверка на повторный отзыв
         if Feedback.objects.filter(rental=rental, feedback_type=feedback_type, author=request.user).exists():
             raise serializers.ValidationError('Вы уже оставили отзыв')
 
@@ -323,6 +294,7 @@ class FeedbackSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+# Сериализатор избранного
 class FavoriteSerializer(serializers.ModelSerializer):
     car = CarListSerializer(read_only=True)
     car_id = serializers.PrimaryKeyRelatedField(
@@ -336,6 +308,7 @@ class FavoriteSerializer(serializers.ModelSerializer):
         fields = ['id', 'car', 'car_id', 'created_date']
 
 
+# Сериализатор сообщения в чате
 class ChatMessageSerializer(serializers.ModelSerializer):
     sender = UserSerializer(read_only=True)
 
@@ -344,6 +317,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         fields = ['id', 'sender', 'message', 'is_read', 'created_date']
 
 
+# Сериализатор чата (с вложенными сообщениями)
 class ChatSerializer(serializers.ModelSerializer):
     rental = RentalListSerializer(read_only=True)
     messages = ChatMessageSerializer(many=True, read_only=True)
@@ -353,10 +327,11 @@ class ChatSerializer(serializers.ModelSerializer):
         fields = ['id', 'rental', 'messages', 'created_date']
 
 
+# Сериализатор жалобы
 class ComplaintSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     target_user = UserSerializer(read_only=True)
-    target_user_id = serializers.PrimaryKeyRelatedField(
+    target_user_id = serializers.PrimaryKeyRelatedField(  # ID пользователя на кого жалуются
         queryset=User.objects.all(),
         write_only=True,
         source='target_user',
@@ -372,10 +347,35 @@ class ComplaintSerializer(serializers.ModelSerializer):
         read_only_fields = ['author', 'status', 'admin_response']
 
 
+# Сериализатор запроса кода верификации
 class VerificationCodeSerializer(serializers.Serializer):
     verification_type = serializers.ChoiceField(choices=['email', 'phone'])
 
 
+# Сериализатор подтверждения кода верификации
 class VerificationConfirmSerializer(serializers.Serializer):
     verification_type = serializers.ChoiceField(choices=['email', 'phone'])
     code = serializers.CharField(max_length=6)
+
+
+# Сериализатор запроса сброса пароля (принимает email)
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        # Проверка: пользователь с таким email должен существовать
+        if not User.objects.filter(email=value).exists():
+            raise serializers.ValidationError('Пользователь с таким email не найден')
+        return value
+
+
+# Сериализатор подтверждения сброса пароля (код + новый пароль)
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=6)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate_email(self, value):
+        if not User.objects.filter(email=value).exists():
+            raise serializers.ValidationError('Пользователь с таким email не найден')
+        return value

@@ -1,11 +1,17 @@
+# Административная панель Django (/admin/)
+# Регистрируем модели, чтобы ими можно было управлять через веб-интерфейс
+
 from django.contrib import admin
+from django.db.models import Sum, Count, Avg
+from django.utils import timezone
+from datetime import timedelta
 from .models import *
 
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ('username', 'email', 'role', 'phone_number', 'email_verified', 'phone_verified', 'is_verified')
-    list_filter = ('role', 'email_verified', 'phone_verified', 'is_verified')
+    list_display = ('username', 'email', 'is_owner', 'is_renter', 'is_staff', 'phone_number', 'email_verified', 'is_verified')
+    list_filter = ('is_owner', 'is_renter', 'is_staff', 'email_verified', 'is_verified')
     search_fields = ('username', 'email', 'phone_number')
 
 
@@ -78,3 +84,48 @@ class VerificationCodeAdmin(admin.ModelAdmin):
     list_display = ('user', 'verification_type', 'code', 'is_used', 'expires_at', 'created_date')
     list_filter = ('verification_type', 'is_used', 'created_date')
     search_fields = ('user__username', 'code')
+
+
+# Дашборд для админа — страница /admin/dashboard/
+# Показывает сводку по платформе: статистику, топ машин, доход
+from django.template.response import TemplateResponse
+
+
+def dashboard_view(request):
+    today = timezone.now()
+    month_ago = today - timedelta(days=30)
+
+    total_users = User.objects.count()
+    total_cars = Car.objects.count()
+    total_rentals = Rental.objects.count()
+    active_rentals = Rental.objects.filter(status='active').count()
+    pending_rentals = Rental.objects.filter(status='pending').count()
+    total_feedbacks = Feedback.objects.count()
+    pending_complaints = Complaint.objects.filter(status='pending').count()
+
+    monthly_revenue = Rental.objects.filter(
+        status='completed',
+        created_date__gte=month_ago
+    ).aggregate(Sum('total_price'))['total_price__sum'] or 0
+
+    popular_cars = Car.objects.annotate(
+        rental_count=Count('rentals')
+    ).order_by('-rental_count')[:5]
+
+    context = {
+        'title': 'Дашборд',
+        'total_users': total_users,
+        'total_cars': total_cars,
+        'total_rentals': total_rentals,
+        'active_rentals': active_rentals,
+        'pending_rentals': pending_rentals,
+        'total_feedbacks': total_feedbacks,
+        'pending_complaints': pending_complaints,
+        'monthly_revenue': monthly_revenue,
+        'popular_cars': popular_cars,
+        'is_nav_sidebar_enabled': True,
+    }
+    return TemplateResponse(request, 'admin/dashboard.html', context)
+
+
+admin.site.index_title = 'Avto Admin'
