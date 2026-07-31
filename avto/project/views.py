@@ -2,17 +2,34 @@
 # Каждый класс — это один endpoint API (или несколько, если ViewSet)
 # DRF-generic классы берут на себя 90% шаблонного кода
 
-from rest_framework import viewsets, generics, permissions, status
-from .serializers import *
+import random
+from datetime import date, datetime, timedelta
+from django.utils import timezone
+from calendar import monthrange
+
+from django.contrib.auth.models import AnonymousUser
+from django.db.models import Sum, Count, Avg
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import viewsets, generics, permissions, status
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.filters import SearchFilter
-from .filters import CarFilter, RentalFilter, FeedbackFilter
-from .pagination import CarPagination, RentalPagination, FeedbackPagination, ChatPagination, ComplaintPagination
-from .permissions import IsOwnerOrAdmin, IsRenterOrAdmin, IsOwnerOrReadOnly, IsRentalParticipant
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.contrib.auth.models import AnonymousUser
-from .services import send_sms
+
+from .filters import CarFilter, RentalFilter, FeedbackFilter
+from .models import Car, CarImage, CarUnavailableDate, Rental, Feedback, VerificationCode, User, Complaint, Chat, ChatMessage, Favorite
+from .pagination import CarPagination, RentalPagination, FeedbackPagination, ChatPagination, ComplaintPagination
+from .permissions import IsOwnerOrAdmin, IsOwnerOrReadOnly, IsRentalParticipant
+from .serializers import (
+    RegisterSerializer, CustomLoginSerializer, LogoutSerializer,
+    UserSerializer, CarListSerializer, CarDetailSerializer,
+    CarImageSerializer, CarImageBulkUploadSerializer,
+    CarUnavailableDateSerializer, RentalListSerializer, RentalDetailSerializer,
+    FeedbackSerializer, FavoriteSerializer, ChatSerializer, ChatMessageSerializer,
+    ComplaintSerializer, VerificationCodeSerializer, VerificationConfirmSerializer,
+    PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+)
+from .services import send_sms, send_email
 
 
 # Регистрация нового пользователя
@@ -59,9 +76,9 @@ class LogoutView(generics.GenericAPIView):
 class UserProfileListAPIView(generics.ListAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Возвращает только текущего пользователя (не список всех)
         return User.objects.filter(id=self.request.user.id)
 
 
@@ -69,6 +86,7 @@ class UserProfileListAPIView(generics.ListAPIView):
 class UserProfileDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         # Только свой профиль
@@ -117,14 +135,25 @@ class CarImageUploadAPIView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def perform_create(self, serializer):
-        # Проверка: машина должна принадлежать текущему пользователю
         car_id = self.request.data.get('car_id')
         try:
             car = Car.objects.get(id=car_id, owner=self.request.user)
             serializer.save(car=car)
         except Car.DoesNotExist:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Автомобиль не найден или вы не владелец'})
+
+
+# Массовая загрузка нескольких фото к автомобилю (POST)
+class CarImageBulkUploadAPIView(generics.CreateAPIView):
+    serializer_class = CarImageBulkUploadSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        images = serializer.save()
+        result_serializer = CarImageSerializer(images, many=True)
+        return Response(result_serializer.data, status=status.HTTP_201_CREATED)
 
 
 # Управление заблокированными датами (владелец вручную блокирует дни)
@@ -143,7 +172,6 @@ class CarUnavailableDateAPIView(generics.ListCreateAPIView):
             car = Car.objects.get(id=car_id, owner=self.request.user)
             serializer.save(car=car)
         except Car.DoesNotExist:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Автомобиль не найден или вы не владелец'})
 
 
@@ -170,6 +198,9 @@ class RentalListAPIView(generics.ListCreateAPIView):
         as_owner = Rental.objects.filter(car__owner=self.request.user)
         as_renter = Rental.objects.filter(renter=self.request.user)
         return (as_owner | as_renter).distinct()
+
+    def perform_create(self, serializer):
+        serializer.save(renter=self.request.user)
 
 
 # Детальная страница аренды
@@ -271,6 +302,21 @@ class FeedbackViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
 
+    def perform_update(self, serializer):
+        # Редактировать отзыв может только его автор или админ
+        # (participant может видеть чужой отзыв, но менять — нет)
+        instance = self.get_object()
+        if instance.author != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied('Только автор отзыва или администратор может редактировать его')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        # Удалять отзыв может только его автор или админ
+        # Раньше любой участник аренды мог удалить чужой отзыв — это дыра в правах
+        if instance.author != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied('Только автор отзыва или администратор может удалить его')
+        instance.delete()
+
 
 # Удаление фото автомобиля (DELETE — только владелец машины)
 class CarImageDeleteAPIView(generics.DestroyAPIView):
@@ -298,7 +344,6 @@ class CarAvailableAPIView(generics.ListAPIView):
         end_date = self.request.query_params.get('end_date')
 
         if start_date and end_date:
-            from datetime import datetime
             try:
                 start = datetime.strptime(start_date, '%Y-%m-%d').date()
                 end = datetime.strptime(end_date, '%Y-%m-%d').date()
@@ -337,8 +382,6 @@ class OwnerStatsAPIView(generics.GenericAPIView):
         if not request.user.is_owner:
             return Response({'detail': 'Только для владельцев'}, status=status.HTTP_403_FORBIDDEN)
 
-        from django.db.models import Sum, Count, Avg
-
         cars = Car.objects.filter(owner=request.user)
         rentals = Rental.objects.filter(car__owner=request.user)
         completed_rentals = rentals.filter(status='completed')
@@ -354,7 +397,6 @@ class OwnerStatsAPIView(generics.GenericAPIView):
             rental_count=Count('rentals')
         ).order_by('-rental_count').first()
 
-        from datetime import datetime, timedelta
         today = datetime.today()
         first_day = today.replace(day=1)
         monthly_revenue = completed_rentals.filter(
@@ -385,10 +427,8 @@ class FavoriteListAPIView(generics.ListCreateAPIView):
         return Favorite.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        # Проверка: нельзя добавить одну машину дважды
         car = serializer.validated_data['car']
         if Favorite.objects.filter(user=self.request.user, car=car).exists():
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Автомобиль уже в избранном'})
         serializer.save(user=self.request.user)
 
@@ -440,13 +480,10 @@ class ChatMessageCreateAPIView(generics.CreateAPIView):
         chat_id = self.request.data.get('chat_id')
         try:
             chat = Chat.objects.get(id=chat_id)
-            # Проверка: только участники чата могут писать
             if chat.rental.renter != self.request.user and chat.rental.car.owner != self.request.user:
-                from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied('Вы не участник этого чата')
             serializer.save(chat=chat, sender=self.request.user)
         except Chat.DoesNotExist:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Чат не найден'})
 
 
@@ -488,11 +525,8 @@ class SendVerificationCodeAPIView(generics.GenericAPIView):
 
         verification_type = serializer.validated_data['verification_type']
 
-        import random
-        from datetime import datetime, timedelta
-
         code = str(random.randint(100000, 999999))
-        expires_at = datetime.now() + timedelta(minutes=10)
+        expires_at = timezone.now() + timedelta(minutes=10)
 
         VerificationCode.objects.create(
             user=request.user,
@@ -501,7 +535,14 @@ class SendVerificationCodeAPIView(generics.GenericAPIView):
             expires_at=expires_at
         )
 
-        # TODO: Отправить код на email или телефон (пока не реализовано)
+        if verification_type == 'email':
+            send_email(
+                subject='Код подтверждения',
+                message=f'Ваш код подтверждения: {code}',
+                recipient_list=[request.user.email],
+            )
+        else:
+            send_sms(request.user.phone_number, f'Ваш код подтверждения: {code}')
 
         return Response({
             'message': f'Код верификации отправлен на {verification_type}'
@@ -520,15 +561,13 @@ class ConfirmVerificationCodeAPIView(generics.GenericAPIView):
         verification_type = serializer.validated_data['verification_type']
         code = serializer.validated_data['code']
 
-        from datetime import datetime
-
         try:
             verification = VerificationCode.objects.get(
                 user=request.user,
                 code=code,
                 verification_type=verification_type,
                 is_used=False,
-                expires_at__gte=datetime.now()
+                expires_at__gte=timezone.now()
             )
 
             verification.is_used = True
@@ -563,11 +602,8 @@ class PasswordResetRequestAPIView(generics.GenericAPIView):
         email = serializer.validated_data['email']
         user = User.objects.get(email=email)
 
-        import random
-        from datetime import datetime, timedelta
-
         code = str(random.randint(100000, 999999))
-        expires_at = datetime.now() + timedelta(minutes=10)
+        expires_at = timezone.now() + timedelta(minutes=10)
 
         VerificationCode.objects.create(
             user=user,
@@ -576,13 +612,12 @@ class PasswordResetRequestAPIView(generics.GenericAPIView):
             expires_at=expires_at
         )
 
-        # TODO: Отправить код на email (пока не реализовано)
-        print(f'[EMAIL] To: {email} | Код сброса пароля: {code}')
-
-        try:
-            send_sms(user.phone_number, f'Код сброса пароля: {code}')
-        except:
-            pass
+        send_email(
+            subject='Сброс пароля',
+            message=f'Ваш код для сброса пароля: {code}',
+            recipient_list=[email],
+        )
+        send_sms(user.phone_number, f'Код сброса пароля: {code}')
 
         return Response({
             'message': 'Код сброса отправлен на вашу почту'
@@ -602,8 +637,6 @@ class PasswordResetConfirmAPIView(generics.GenericAPIView):
         code = serializer.validated_data['code']
         new_password = serializer.validated_data['new_password']
 
-        from datetime import datetime
-
         try:
             user = User.objects.get(email=email)
 
@@ -612,7 +645,7 @@ class PasswordResetConfirmAPIView(generics.GenericAPIView):
                 code=code,
                 verification_type='password_reset',
                 is_used=False,
-                expires_at__gte=datetime.now()
+                expires_at__gte=timezone.now()
             )
 
             verification.is_used = True
@@ -637,9 +670,6 @@ class CarCalendarAPIView(generics.GenericAPIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, pk):
-        from datetime import datetime, timedelta
-        from calendar import monthrange
-
         try:
             car = Car.objects.get(pk=pk)
         except Car.DoesNotExist:
@@ -649,8 +679,8 @@ class CarCalendarAPIView(generics.GenericAPIView):
         month = request.query_params.get('month')
 
         try:
-            year = int(year) if year else datetime.now().year
-            month = int(month) if month else datetime.now().month
+            year = int(year) if year else timezone.now().year
+            month = int(month) if month else timezone.now().month
         except ValueError:
             return Response({'detail': 'Неверный формат года или месяца'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -693,7 +723,7 @@ class CarCalendarAPIView(generics.GenericAPIView):
                 status_str = 'booked'
             elif date in blocked_dates:
                 status_str = 'blocked'
-            elif date < datetime.now().date():
+            elif date < timezone.now().date():
                 status_str = 'past'
 
             calendar_data.append({

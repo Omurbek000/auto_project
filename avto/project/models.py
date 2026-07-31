@@ -3,6 +3,8 @@
 
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.db.models import Avg
+from datetime import date
 from phonenumber_field.modelfields import PhoneNumberField
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -57,18 +59,14 @@ class User(AbstractUser):
 
     @property
     def age(self):
-        # Возраст пользователя (на основе date_of_birth)
         if self.date_of_birth:
-            from datetime import date
             today = date.today()
             return today.year - self.date_of_birth.year - ((today.month, today.day) < (self.date_of_birth.month, self.date_of_birth.day))
         return None
 
     @property
     def driving_experience(self):
-        # Стаж вождения (на основе driving_license_date)
         if self.driving_license_date:
-            from datetime import date
             today = date.today()
             years = today.year - self.driving_license_date.year
             return years if years >= 0 else 0
@@ -76,28 +74,22 @@ class User(AbstractUser):
 
     @property
     def renter_rating(self):
-        # Средняя оценка пользователя как арендатора
-        from django.db.models import Avg
         feedbacks = Feedback.objects.filter(rental__renter=self, feedback_type='renter')
         avg = feedbacks.aggregate(Avg('rating'))['rating__avg']
         return round(avg, 2) if avg else None
 
     @property
     def renter_rating_count(self):
-        # Сколько отзывов о пользователе как об арендаторе
         return Feedback.objects.filter(rental__renter=self, feedback_type='renter').count()
 
     @property
     def owner_rating(self):
-        # Средняя оценка пользователя как владельца
-        from django.db.models import Avg
         feedbacks = Feedback.objects.filter(rental__car__owner=self, feedback_type='car')
         avg = feedbacks.aggregate(Avg('rating'))['rating__avg']
         return round(avg, 2) if avg else None
 
     @property
     def owner_rating_count(self):
-        # Сколько отзывов о пользователе как о владельце
         return Feedback.objects.filter(rental__car__owner=self, feedback_type='car').count()
 
 
@@ -112,7 +104,7 @@ class Car(models.Model):
     price_per_day = models.DecimalField(max_digits=10, decimal_places=2)  # Цена за сутки
     description = models.TextField()                                      # Описание
     location = models.CharField(max_length=255)                           # Локация (город/адрес)
-    image = models.ImageField(upload_to='car_images/')                    # Главное фото
+    image = models.ImageField(upload_to='car_images/', blank=True, null=True)  # Главное фото
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='cars')  # Владелец (кто сдаёт)
     is_available = models.BooleanField(default=True)                      # Доступна ли сейчас
     min_age = models.PositiveIntegerField(default=21)                     # Минимальный возраст арендатора
@@ -126,15 +118,12 @@ class Car(models.Model):
 
     @property
     def average_rating(self):
-        # Средняя оценка автомобиля (из отзывов арендаторов)
-        from django.db.models import Avg
-        avg = self.rentals.filter(feedback__isnull=False).aggregate(Avg('feedback__rating'))['feedback__rating__avg']
+        avg = self.rentals.filter(feedbacks__isnull=False).aggregate(Avg('feedbacks__rating'))['feedbacks__rating__avg']
         return round(avg, 2) if avg else None
 
     @property
     def feedbacks_count(self):
-        # Сколько отзывов у автомобиля
-        return self.rentals.filter(feedback__isnull=False).count()
+        return self.rentals.filter(feedbacks__isnull=False).count()
 
     class Meta:
         ordering = ['-created_date']  # Сортировка: новые сверху

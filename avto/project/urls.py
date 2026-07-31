@@ -4,7 +4,24 @@
 from django.urls import path, include
 from rest_framework import routers
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import *
+
+from .views import (
+    RegisterView, CustomLoginView, LogoutView,
+    UserProfileListAPIView, UserProfileDetailAPIView,
+    SendVerificationCodeAPIView, ConfirmVerificationCodeAPIView,
+    CarListAPIView, CarOwnerListAPIView, CarAvailableAPIView,
+    CarDetailAPIView, CarUnavailableDateAPIView,
+    CarImageUploadAPIView, CarImageBulkUploadAPIView, CarImageDeleteAPIView,
+    CarCalendarAPIView,
+    FavoriteListAPIView, FavoriteDeleteAPIView,
+    RentalListAPIView, RentalDetailAPIView,
+    RentalConfirmAPIView, RentalRejectAPIView, RentalCompleteAPIView,
+    FeedbackViewSet,
+    ChatListAPIView, ChatDetailAPIView, ChatMessageCreateAPIView,
+    ComplaintListAPIView, ComplaintDetailAPIView,
+    PasswordResetRequestAPIView, PasswordResetConfirmAPIView,
+    StatsAPIView, OwnerStatsAPIView,
+)
 
 # Router для ViewSet (один класс — несколько эндпоинтов)
 router = routers.DefaultRouter()
@@ -34,6 +51,7 @@ urlpatterns = [
     path('car/<int:pk>/', CarDetailAPIView.as_view(), name='car_detail'),
     path('car/<int:car_id>/unavailable/', CarUnavailableDateAPIView.as_view(), name='car_unavailable_dates'),
     path('car/image/upload/', CarImageUploadAPIView.as_view(), name='car_image_upload'),
+    path('car/image/bulk-upload/', CarImageBulkUploadAPIView.as_view(), name='car_image_bulk_upload'),
     path('car/image/<int:pk>/', CarImageDeleteAPIView.as_view(), name='car_image_delete'),
 
     # Календарь доступности

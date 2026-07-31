@@ -5,7 +5,10 @@ from django.contrib import admin
 from django.db.models import Sum, Count, Avg
 from django.utils import timezone
 from datetime import timedelta
-from .models import *
+
+# Явные импорты вместо `from .models import *`
+# (wildcard-импорт тащит всё подряд и мешает понимать, что реально используется)
+from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode
 
 
 @admin.register(User)
@@ -92,9 +95,13 @@ from django.template.response import TemplateResponse
 
 
 def dashboard_view(request):
+    # Админ-дашборд: сводка по всей платформе для администратора.
+    # Считает количество сущностей, доход за 30 дней и топ-5 машин по числу аренд.
+    # Данные передаются в шаблон templates/admin/dashboard.html
     today = timezone.now()
     month_ago = today - timedelta(days=30)
 
+    # Базовые счётчики платформы
     total_users = User.objects.count()
     total_cars = Car.objects.count()
     total_rentals = Rental.objects.count()
@@ -103,11 +110,13 @@ def dashboard_view(request):
     total_feedbacks = Feedback.objects.count()
     pending_complaints = Complaint.objects.filter(status='pending').count()
 
+    # Доход за последние 30 дней — только завершённые аренды
     monthly_revenue = Rental.objects.filter(
         status='completed',
         created_date__gte=month_ago
     ).aggregate(Sum('total_price'))['total_price__sum'] or 0
 
+    # Топ-5 самых популярных машин (считаем количество аренд через annotate)
     popular_cars = Car.objects.annotate(
         rental_count=Count('rentals')
     ).order_by('-rental_count')[:5]

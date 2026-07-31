@@ -2,9 +2,10 @@
 # Валидируют входящие данные, определяют какие поля отдавать клиенту
 
 from rest_framework import serializers
-from .models import *
 from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import date
+
+from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode
 
 
 # Сериализатор регистрации нового пользователя
@@ -106,6 +107,27 @@ class UserSerializer(serializers.ModelSerializer):
         ]
 
 
+# Сериализатор для массовой загрузки фото
+class CarImageBulkUploadSerializer(serializers.Serializer):
+    car_id = serializers.IntegerField()
+
+    def validate_car_id(self, value):
+        request = self.context.get('request')
+        if not Car.objects.filter(id=value, owner=request.user).exists():
+            raise serializers.ValidationError('Автомобиль не найден или вы не владелец')
+        return value
+
+    def create(self, validated_data):
+        car = Car.objects.get(id=validated_data['car_id'])
+        files = self.context['request'].FILES.getlist('images')
+        if not files:
+            raise serializers.ValidationError({'images': 'Не загружено ни одного файла'})
+        images = []
+        for f in files:
+            images.append(CarImage.objects.create(car=car, image=f))
+        return images
+
+
 # Сериализатор изображений автомобиля
 class CarImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -126,6 +148,7 @@ class CarListSerializer(serializers.ModelSerializer):
     owner_id = serializers.PrimaryKeyRelatedField(                                      # ID владельца (только запись)
         queryset=User.objects.all(),
         write_only=True,
+        required=False,
         source='owner',
     )
     average_rating = serializers.ReadOnlyField()                                        # Средний рейтинг
@@ -271,21 +294,25 @@ class FeedbackSerializer(serializers.ModelSerializer):
         rental = data.get('rental')
         feedback_type = data.get('feedback_type')
 
-        if rental.status != 'completed':
-            raise serializers.ValidationError('Вы можете оставлять отзывы только для завершенных аренд')
+        # Эти проверки актуальны только при создании отзыва (или когда rental/тип
+        # явно переданы). При частичном обновлении (PATCH) rental может быть None —
+        # тогда за права отвечает views.perform_update (только автор или админ)
+        if rental and feedback_type:
+            if rental.status != 'completed':
+                raise serializers.ValidationError('Вы можете оставлять отзывы только для завершенных аренд')
 
-        if feedback_type == 'car':
-            if rental.renter != request.user:
-                raise serializers.ValidationError('Только арендатор может оставить отзыв на автомобиль')
-        elif feedback_type == 'renter':
-            if rental.car.owner != request.user:
-                raise serializers.ValidationError('Только владелец может оставить отзыв на арендатора')
-        else:
-            raise serializers.ValidationError('Неверный тип отзыва')
+            if feedback_type == 'car':
+                if rental.renter != request.user:
+                    raise serializers.ValidationError('Только арендатор может оставить отзыв на автомобиль')
+            elif feedback_type == 'renter':
+                if rental.car.owner != request.user:
+                    raise serializers.ValidationError('Только владелец может оставить отзыв на арендатора')
+            else:
+                raise serializers.ValidationError('Неверный тип отзыва')
 
-        # Проверка на повторный отзыв
-        if Feedback.objects.filter(rental=rental, feedback_type=feedback_type, author=request.user).exists():
-            raise serializers.ValidationError('Вы уже оставили отзыв')
+            # Проверка на повторный отзыв
+            if Feedback.objects.filter(rental=rental, feedback_type=feedback_type, author=request.user).exists():
+                raise serializers.ValidationError('Вы уже оставили отзыв')
 
         return data
 
