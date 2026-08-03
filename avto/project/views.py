@@ -19,7 +19,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .filters import CarFilter, RentalFilter, FeedbackFilter
 from .models import Car, CarImage, CarUnavailableDate, Rental, Feedback, VerificationCode, User, Complaint, Chat, ChatMessage, Favorite, AuditLog
-from .pagination import CarPagination, RentalPagination, FeedbackPagination, ChatPagination, ComplaintPagination, AuditLogPagination
+from .pagination import CarPagination, RentalPagination, FeedbackPagination, ChatPagination, ComplaintPagination, AuditLogPagination, OperationPagination
 from .permissions import IsOwnerOrAdmin, IsOwnerOrReadOnly, IsRentalParticipant
 from .serializers import (
     RegisterSerializer, CustomLoginSerializer, LogoutSerializer,
@@ -27,8 +27,8 @@ from .serializers import (
     CarImageSerializer, CarImageBulkUploadSerializer,
     CarUnavailableDateSerializer, RentalListSerializer, RentalDetailSerializer,
     FeedbackSerializer, FavoriteSerializer, ChatSerializer, ChatMessageSerializer,
-    ComplaintSerializer, VerificationCodeSerializer, VerificationConfirmSerializer,
-    PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+    ComplaintSerializer,     VerificationCodeSerializer, VerificationConfirmSerializer,
+    PasswordResetRequestSerializer, PasswordResetConfirmSerializer, PasswordChangeSerializer,
     AdminUserSerializer, AdminComplaintSerializer, AuditLogSerializer,
 )
 from .services import send_sms, send_email, log_action
@@ -281,6 +281,32 @@ class RentalRejectAPIView(generics.GenericAPIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+# Начало аренды арендатором (confirmed → active).
+# Ранее в API не было перехода confirmed → active, из-за чего аренда
+# застревала на confirmed: не было active → не было completed → отзывы и
+# доход владельца были недоступны.
+class RentalStartAPIView(generics.GenericAPIView):
+    queryset = Rental.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            rental = Rental.objects.get(pk=pk)
+        except Rental.DoesNotExist:
+            return Response({'detail': 'Аренда не найдена'}, status=status.HTTP_404_NOT_FOUND)
+
+        if rental.renter != request.user:
+            return Response({'detail': 'Только арендатор может начать аренду'}, status=status.HTTP_403_FORBIDDEN)
+
+        if rental.status != 'confirmed':
+            return Response({'detail': 'Можно начать только подтверждённую аренду'}, status=status.HTTP_400_BAD_REQUEST)
+
+        rental.status = 'active'
+        rental.save()
+        serializer = RentalDetailSerializer(rental)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 # Завершение аренды арендатором (active → completed)
 class RentalCompleteAPIView(generics.GenericAPIView):
     queryset = Rental.objects.all()
@@ -356,7 +382,7 @@ class CarImageDeleteAPIView(generics.DestroyAPIView):
 # Доступные автомобили на конкретные даты (GET)
 # Учитывает уже забронированные и заблокированные даты
 class CarAvailableAPIView(generics.ListAPIView):
-    queryset = Car.objects.filter(is_available=True)
+    queryset = Car.objects.all()
     serializer_class = CarListSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter]
     filterset_class = CarFilter
@@ -364,7 +390,9 @@ class CarAvailableAPIView(generics.ListAPIView):
     pagination_class = CarPagination
 
     def get_queryset(self):
-        queryset = Car.objects.filter(is_available=True)
+        # Не фильтруем по is_available: машина занята только на конкретные даты,
+        # а не «вообще». Свободу проверяем ниже по пересечению дат с арендами.
+        queryset = Car.objects.all()
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
 
@@ -446,8 +474,9 @@ class OwnerStatsAPIView(generics.GenericAPIView):
 # Журнал операций текущего пользователя (GET)
 # Собирает в одну timeline все события: аренды, отзывы, жалобы.
 # Нужен для «журнала операций» в личном кабинете.
-class UserOperationsAPIView(generics.GenericAPIView):
+class UserOperationsAPIView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = OperationPagination
 
     def get(self, request, *args, **kwargs):
         user = request.user
@@ -485,9 +514,10 @@ class UserOperationsAPIView(generics.GenericAPIView):
                 'date': complaint.created_date.isoformat(),
             })
 
-        # Сортируем от новых к старым и ограничиваем (защита от огромного ответа)
+        # Сортируем от новых к старым и отдаём постранично
         operations.sort(key=lambda x: x['date'], reverse=True)
-        return Response(operations[:200])
+        page = self.paginate_queryset(operations)
+        return self.get_paginated_response(page)
 
 
 # Аналитика для личного кабинета пользователя (GET)
@@ -674,8 +704,9 @@ class AdminAnalyticsAPIView(generics.GenericAPIView):
 # Журнал всех операций платформы (GET — только staff)
 # В отличие от UserOperationsAPIView включает данные о пользователях.
 # ВАЖНО: НЕ содержит сумм (amount) — финансы пользователей анонимны.
-class AdminOperationsAPIView(generics.GenericAPIView):
+class AdminOperationsAPIView(generics.ListAPIView):
     permission_classes = [permissions.IsAdminUser]
+    pagination_class = OperationPagination
 
     def get(self, request, *args, **kwargs):
         operations = []
@@ -714,7 +745,8 @@ class AdminOperationsAPIView(generics.GenericAPIView):
             })
 
         operations.sort(key=lambda x: x['date'], reverse=True)
-        return Response(operations[:200])
+        page = self.paginate_queryset(operations)
+        return self.get_paginated_response(page)
 
 
 # Избранное (GET — список, POST — добавить)
@@ -784,6 +816,27 @@ class ChatMessageCreateAPIView(generics.CreateAPIView):
             serializer.save(chat=chat, sender=self.request.user)
         except Chat.DoesNotExist:
             raise ValidationError({'detail': 'Чат не найден'})
+
+
+# Отметить сообщения собеседника прочитанными (POST)
+class ChatMarkReadAPIView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            chat = Chat.objects.get(pk=pk)
+        except Chat.DoesNotExist:
+            return Response({'detail': 'Чат не найден'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Только участник аренды может читать чат
+        if chat.rental.renter != request.user and chat.rental.car.owner != request.user:
+            return Response({'detail': 'Вы не участник этого чата'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Прочитанными считаются сообщения собеседника (свои не трогаем)
+        other_party = chat.rental.car.owner if chat.rental.renter == request.user else chat.rental.renter
+        updated = ChatMessage.objects.filter(chat=chat, sender=other_party, is_read=False).update(is_read=True)
+
+        return Response({'updated': updated}, status=status.HTTP_200_OK)
 
 
 # Список жалоб (GET — свои, POST — создать)
@@ -991,6 +1044,23 @@ class PasswordResetConfirmAPIView(generics.GenericAPIView):
             return Response({
                 'detail': 'Неверный или истекший код'
             }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# Смена пароля авторизованного пользователя (POST — старый + новый пароль)
+class PasswordChangeAPIView(generics.GenericAPIView):
+    serializer_class = PasswordChangeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        request.user.set_password(serializer.validated_data['new_password'])
+        request.user.save()
+
+        return Response({
+            'message': 'Пароль успешно изменён'
+        }, status=status.HTTP_200_OK)
 
 
 # Календарь доступности автомобиля (GET — по году и месяцу)

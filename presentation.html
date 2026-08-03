@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AVTO — Backend Presentation</title>
+<style>
+  :root{
+    --bg1:#0a0a1a; --bg2:#1a1a2e;
+    --a1:#6C63FF; --a2:#4F8CFF; --a3:#8A6CFF;
+    --glass:rgba(255,255,255,.05); --edge:rgba(255,255,255,.1);
+    --txt:#fff; --txt2:rgba(255,255,255,.72); --txt3:rgba(255,255,255,.45);
+    --ok:#10B981; --bad:#EF4444; --warn:#F59E0B;
+    --mono:'Consolas','JetBrains Mono',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:Inter,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:radial-gradient(1200px 700px at 85% -10%,rgba(108,99,255,.18),transparent 60%),
+               radial-gradient(1000px 600px at 0% 110%,rgba(79,140,255,.16),transparent 60%),
+               linear-gradient(135deg,var(--bg1),var(--bg2));
+    color:var(--txt);overflow:hidden;
+  }
+
+  /* ====== фоновые светящиеся шары ====== */
+  .orb{position:fixed;border-radius:50%;filter:blur(70px);opacity:.5;z-index:0;pointer-events:none}
+  .orb1{width:420px;height:420px;background:var(--a1);top:-140px;right:-120px;animation:float 16s ease-in-out infinite}
+  .orb2{width:360px;height:360px;background:var(--a2);bottom:-120px;left:-100px;animation:float 20s ease-in-out infinite reverse}
+  .orb3{width:220px;height:220px;background:#7b6bff;top:45%;left:55%;opacity:.35;animation:float 24s ease-in-out infinite}
+  @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,40px)}}
+
+  /* ====== слайды ====== */
+  .stage{position:fixed;inset:0;z-index:1}
+  .slide{
+    position:absolute;inset:0;padding:56px 8vw 84px;
+    display:flex;flex-direction:column;justify-content:center;
+    opacity:0;visibility:hidden;transform:scale(.96) translateY(12px);
+    transition:opacity .55s ease,transform .55s ease,visibility .55s;
+    overflow-y:auto;
+  }
+  .slide.active{opacity:1;visibility:visible;transform:none}
+
+  .wrap{max-width:1180px;margin:0 auto;width:100%}
+
+  .kicker{color:var(--a2);text-transform:uppercase;letter-spacing:.22em;font-size:12px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+  .kicker::before{content:"";width:26px;height:2px;background:linear-gradient(90deg,var(--a1),var(--a2))}
+  h1{font-size:clamp(34px,5vw,60px);line-height:1.05;font-weight:800;letter-spacing:-.02em}
+  h2{font-size:clamp(26px,3.4vw,40px);font-weight:800;letter-spacing:-.02em;margin-bottom:8px}
+  .sub{color:var(--txt2);font-size:clamp(15px,1.6vw,19px);line-height:1.6;max-width:70ch}
+  .grad{background:linear-gradient(90deg,var(--a1),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .mono{font-family:var(--mono)}
+
+  /* появление элементов внутри активного слайда */
+  .rv{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
+  .slide.active .rv{opacity:1;transform:none}
+  .d1{transition-delay:.06s}.d2{transition-delay:.14s}.d3{transition-delay:.22s}
+  .d4{transition-delay:.30s}.d5{transition-delay:.38s}.d6{transition-delay:.46s}
+  .d7{transition-delay:.54s}.d8{transition-delay:.62s}.d9{transition-delay:.70s}
+
+  /* ====== стеклянные карточки ====== */
+  .glass{
+    background:var(--glass);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    border:1px solid var(--edge);border-radius:16px;padding:22px;
+    transition:transform .25s ease,border-color .25s ease,box-shadow .25s ease;
+  }
+  .glass:hover{transform:translateY(-4px);border-color:rgba(255,255,255,.22);box-shadow:0 20px 50px rgba(0,0,0,.4)}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr 1fr}}
+  @media(max-width:600px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+  .ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;margin-bottom:14px;
+      background:linear-gradient(135deg,rgba(108,99,255,.25),rgba(79,140,255,.25));border:1px solid var(--edge);color:#cfc9ff}
+  .card-title{font-size:16px;font-weight:700;margin-bottom:6px}
+  .card-desc{font-size:13.5px;color:var(--txt2);line-height:1.5}
+
+  /* ====== badge / chip ====== */
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:600;
+        background:rgba(255,255,255,.06);border:1px solid var(--edge);color:var(--txt2)}
+  .chip b{color:var(--txt)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--a2)}
+
+  /* метод HTTP */
+  .method{display:inline-block;padding:2px 8px;border-radius:6px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.04em}
+  .m-get{background:rgba(16,185,129,.16);color:#34d399;border:1px solid rgba(16,185,129,.3)}
+  .m-post{background:rgba(79,140,255,.16);color:#7ab0ff;border:1px solid rgba(79,140,255,.3)}
+  .m-patch{background:rgba(245,158,11,.16);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
+  .m-del{background:rgba(239,68,68,.16);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+
+  /* код / терминал */
+  .code{
+    font-family:var(--mono);font-size:12.5px;line-height:1.65;color:#cdd6ff;
+    background:rgba(0,0,0,.35);border:1px solid var(--edge);border-radius:14px;
+    padding:18px 20px;white-space:pre;overflow-x:auto;
+  }
+  .code .c{color:#34d399}.code .p{color:#fbbf24}.code .s{color:#93c5fd}.code .g{color:#94a3b8}
+
+  /* схема шагов (статусы аренды) */
+  .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .step{padding:12px 18px;border-radius:12px;font-weight:700;font-size:14px;text-align:center;
+        background:rgba(255,255,255,.05);border:1px solid var(--edge);color:var(--txt2);
+        transition:all .5s ease;opacity:.35}
+  .step.on{opacity:1;color:#fff;background:linear-gradient(135deg,rgba(108,99,255,.5),rgba(79,140,255,.5));border-color:rgba(255,255,255,.3);
+           box-shadow:0 0 30px rgba(108,99,255,.35)}
+  .flow-arrow{color:var(--a2);font-size:20px;font-weight:800}
+  .flow-arrow.bad{color:var(--bad)}
+
+  /* терминал */
+  .term{font-family:var(--mono);font-size:13px;line-height:1.8;background:rgba(0,0,0,.4);border:1px solid var(--edge);
+        border-radius:14px;padding:20px;overflow-x:auto}
+  .term .t{color:#34d399}.term .cm{color:#e2e8f0}.term .out{color:#94a3b8}.term .pr{color:#fbbf24}
+  .cur{display:inline-block;width:9px;height:16px;background:var(--a2);vertical-align:middle;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* бары */
+  .bars{display:flex;align-items:flex-end;gap:12px;height:170px;padding-top:10px}
+  .bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
+  .bar .fill{width:100%;max-width:46px;border-radius:8px 8px 4px 4px;
+             background:linear-gradient(180deg,var(--a1),var(--a2));height:0;transition:height 1s cubic-bezier(.2,.8,.2,1)}
+  .bar .lbl{font-size:11px;color:var(--txt3)}
+  .bar .val{font-size:11px;color:var(--txt2);font-weight:700}
+
+  /* донут */
+  .donut{width:190px;height:190px;border-radius:50%;position:relative;
+         background:conic-gradient(#6C63FF 0 45%,#4F8CFF 45% 70%,#34d399 70% 85%,#fbbf24 85% 100%)}
+  .donut::after{content:"";position:absolute;inset:26px;border-radius:50%;background:#15152a}
+  .legend{display:grid;gap:8px;flex:1;min-width:200px}
+  .lg{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--txt2)}
+  .sw{width:12px;height:12px;border-radius:4px;flex:none}
+
+  /* тайл статистики */
+  .stat{text-align:center}
+  .stat .num{font-size:clamp(44px,6vw,72px);font-weight:800;background:linear-gradient(90deg,var(--a1),var(--a2));
+             -webkit-background-clip:text;background-clip:text;color:transparent;line-height:1}
+  .stat .cap{color:var(--txt2);font-size:14px;margin-top:6px}
+
+  /* вкладки API */
+  .api-tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .api-tab{padding:8px 14px;border-radius:10px 10px 0 0;border:1px solid var(--edge);border-bottom:none;
+           background:rgba(255,255,255,.04);color:var(--txt3);font-size:12.5px;font-weight:700;cursor:pointer;transition:all .2s}
+  .api-tab:hover{color:var(--txt)}
+  .api-tab.on{background:linear-gradient(135deg,rgba(108,99,255,.55),rgba(79,140,255,.55));color:#fff;border-color:rgba(255,255,255,.25)}
+  .api-body{padding:18px}
+  .api-panel{display:none}
+  .api-panel.on{display:block;animation:fadeUp .3s ease}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .api-label{font-size:10.5px;color:var(--txt3);text-transform:uppercase;letter-spacing:.14em;margin:12px 0 6px}
+  .api-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px}
+  .api-row .url{color:#e2e8f0;word-break:break-all}
+  .api-box{background:rgba(0,0,0,.35);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;
+           font-family:var(--mono);font-size:12px;line-height:1.65;white-space:pre;overflow-x:auto;color:#cdd6ff}
+  .api-req{border-left:2px solid var(--a2)}
+  .api-resp{border-left:2px solid var(--ok)}
+  .api-resp.err{border-left-color:var(--bad)}
+  .api-box .g{color:#94a3b8}
+  .status{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;font-family:var(--mono)}
+  .s-ok{background:rgba(16,185,129,.16);color:#34d399;border:1px solid rgba(16,185,129,.3)}
+  .s-err{background:rgba(239,68,68,.16);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+
+  /* ====== навигация ====== */
+  .topbar{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;align-items:center;gap:16px;padding:16px 24px}
+  .logo{font-weight:800;letter-spacing:.14em;font-size:15px}
+  .logo span{color:var(--a2)}
+  .progress{flex:1;height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+  .progress i{display:block;height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,var(--a1),var(--a2));transition:width .5s ease}
+  .ctr{font-family:var(--mono);font-size:12px;color:var(--txt3)}
+
+  .nav{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:8px}
+  .nav button{width:46px;height:46px;border-radius:14px;background:var(--glass);border:1px solid var(--edge);
+              color:#fff;font-size:18px;cursor:pointer;transition:all .2s;backdrop-filter:blur(10px)}
+  .nav button:hover{background:linear-gradient(135deg,var(--a1),var(--a2));border-color:transparent}
+  .nav button:disabled{opacity:.3;cursor:default}
+  .hint{position:fixed;bottom:26px;right:26px;z-index:5;font-size:11px;color:var(--txt3)}
+  .dots{position:fixed;right:18px;top:50%;transform:translateY(-50%);z-index:5;display:flex;flex-direction:column;gap:8px}
+  .dots button{width:8px;height:8px;border-radius:50%;border:1px solid var(--edge);background:transparent;cursor:pointer;padding:0;transition:all .2s}
+  .dots button.on{background:var(--a2);border-color:var(--a2);box-shadow:0 0 10px rgba(79,140,255,.6)}
+
+  .foot{position:absolute;bottom:0;left:0;right:0;padding:10px 24px;font-size:11px;color:var(--txt3);display:flex;justify-content:space-between}
+  .foot a{color:var(--a2);text-decoration:none}
+
+  @media(max-width:760px){.dots{display:none}.hint{display:none}}
+</style>
+</head>
+<body>
+<div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div>
+
+<header class="topbar">
+  <div class="logo">AVTO<span>.</span></div>
+  <div class="progress"><i id="bar"></i></div>
+  <div class="ctr" id="ctr">1 / 15</div>
+</header>
+
+<div class="dots" id="dots"></div>
+<div class="hint">← → навигация · F — полный экран</div>
+
+<main class="stage" id="stage">
+
+  <!-- ============ 1. ТИТУЛ ============ -->
+  <section class="slide">
+    <div class="wrap" style="text-align:center;align-items:center;display:flex;flex-direction:column;gap:18px">
+      <div class="rv d1"><div class="logo" style="font-size:clamp(64px,12vw,140px);letter-spacing:.06em">AVTO<span style="color:var(--a2)">.</span></div></div>
+      <h1 class="rv d2"><span class="grad">Car Rental Platform</span></h1>
+      <div class="sub rv d3" style="text-align:center">Бэкенд платформы аренды автомобилей. REST API для фронтенда (React + Vite).</div>
+      <div class="rv d4" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+        <span class="chip"><span class="dot"></span><b>Django 5.2</b></span>
+        <span class="chip"><span class="dot"></span><b>DRF</b></span>
+        <span class="chip"><span class="dot"></span><b>JWT</b></span>
+        <span class="chip"><span class="dot"></span><b>SQLite</b></span>
+        <span class="chip"><span class="dot"></span><b>Swagger /docs/</b></span>
+      </div>
+      <div class="rv d5" style="display:flex;gap:24px;flex-wrap:wrap;justify-content:center">
+        <div class="stat"><div class="num" data-count="128">0</div><div class="cap">автотестов</div></div>
+        <div class="stat"><div class="num" data-count="60">0</div><div class="cap">эндпоинтов</div></div>
+        <div class="stat"><div class="num" data-count="12">0</div><div class="cap">моделей данных</div></div>
+      </div>
+      <div class="sub rv d6" style="font-size:13px;color:var(--txt3)">Защита от двойного бронирования · маркетплейс: финансы пользователей анонимны</div>
+    </div>
+  </section>
+
+  <!-- ============ 2. ОБЗОР ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Обзор</div>
+      <h2 class="rv d2">Что умеет бэкенд</h2>
+      <p class="sub rv d3" style="margin-bottom:26px">Маркетплейс: владельцы сдают машины, арендаторы берут. Полный цикл «из коробки» — от регистрации до отчётов админа.</p>
+      <div class="grid g3">
+        <div class="glass rv d4"><div class="ic">01</div><div class="card-title">Каталог и поиск</div><div class="card-desc">Фильтры (бренд, цена, топливо), поиск по тексту, пагинация, фото и массовая загрузка.</div></div>
+        <div class="glass rv d5"><div class="ic">02</div><div class="card-title">Бронирование</div><div class="card-desc">Автопроверка занятости дат, календарь по дням, поиск свободных машин на даты.</div></div>
+        <div class="glass rv d6"><div class="ic">03</div><div class="card-title">Цикл аренды</div><div class="card-desc">Заявка → подтверждение → старт → завершение. Цена = цена_за_день × дней.</div></div>
+        <div class="glass rv d5"><div class="ic">04</div><div class="card-title">Отзывы и рейтинги</div><div class="card-desc">Только участники завершённой аренды. Отзывы на машину и на арендатора.</div></div>
+        <div class="glass rv d6"><div class="ic">05</div><div class="card-title">Чат и уведомления</div><div class="card-desc">Чат создаётся при брони, уведомления по email/SMS, отметки прочитанного.</div></div>
+        <div class="glass rv d7"><div class="ic">06</div><div class="card-title">Дашборд админа</div><div class="card-desc">Пользователи, жалобы, аналитика платформы и журнал аудита — всё через API во фронте.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3. СТЕК ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Технологии</div>
+      <h2 class="rv d2">Стек</h2>
+      <p class="sub rv d3" style="margin-bottom:26px">Проверенные и простые инструменты: Django берёт на себя ORM и админку, DRF — сериализацию и права.</p>
+      <div class="grid g4">
+        <div class="glass rv d4"><div class="ic">Py</div><div class="card-title">Python 3 + Django 5.2</div><div class="card-desc">Веб-фреймворк: модели, миграции, админка, сигналы.</div></div>
+        <div class="glass rv d5"><div class="ic">DR</div><div class="card-title">DRF</div><div class="card-desc">REST: сериализаторы, views, права доступа, пагинация.</div></div>
+        <div class="glass rv d6"><div class="ic">JWT</div><div class="card-title">SimpleJWT</div><div class="card-desc">Access 5ч + refresh 30д, ротация и чёрный список.</div></div>
+        <div class="glass rv d7"><div class="ic">Fl</div><div class="card-title">django-filter</div><div class="card-desc">Фильтры списков: цена, топливо, статусы, даты.</div></div>
+        <div class="glass rv d5"><div class="ic">DB</div><div class="card-title">SQLite</div><div class="card-desc">По умолчанию; PostgreSQL/MySQL — на проде.</div></div>
+        <div class="glass rv d6"><div class="ic">Sw</div><div class="card-title">drf-yasg</div><div class="card-desc">Интерактивный Swagger на /docs/ для тестирования.</div></div>
+        <div class="glass rv d7"><div class="ic">EM</div><div class="card-title">SMTP + Twilio</div><div class="card-desc">Email/SMS; в dev — вывод в консоль.</div></div>
+        <div class="glass rv d8"><div class="ic">T8</div><div class="card-title">128 автотестов</div><div class="card-desc">Модели, API, права, бизнес-логика, пагинация, аудит.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. СТРУКТУРА ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Архитектура</div>
+      <h2 class="rv d2">Структура проекта</h2>
+      <p class="sub rv d3" style="margin-bottom:22px">Одно Django-приложение <b>project</b>, вся бизнес-логика разложена по понятным файлам.</p>
+      <div class="glass rv d4" style="padding:24px 26px">
+        <div class="code"><span class="g">avto/</span>
+├── <span class="p">avto/</span>              <span class="g"># настройки</span>
+│   ├── settings.py        <span class="g"># БД, CORS, JWT, ATOMIC_REQUESTS, почта</span>
+│   └── urls.py            <span class="g"># маршруты + Swagger + медиа</span>
+├── <span class="p">project/</span>            <span class="g"># приложение</span>
+│   ├── models.py          <span class="s"># 12 моделей</span>
+│   ├── views.py           <span class="s"># 60+ эндпоинтов</span>
+│   ├── serializers.py     <span class="s"># валидация дат аренды</span>
+│   ├── permissions.py     <span class="s"># права доступа</span>
+│   ├── signals.py         <span class="s"># доступность машин, уведомления, чат</span>
+│   ├── services.py        <span class="s"># email/SMS, журнал аудита</span>
+│   ├── filters.py · pagination.py
+│   ├── admin.py           <span class="s"># админка + read-only аудит</span>
+│   └── tests.py           <span class="s"># 128 тестов</span>
+├── <span class="p">manage.py</span> · db.sqlite3</div>
+      </div>
+      <div class="rv d5" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">
+        <span class="chip"><b>models.py</b> — данные</span>
+        <span class="chip"><b>serializers.py</b> — вход/выход</span>
+        <span class="chip"><b>views.py</b> — обработчики</span>
+        <span class="chip"><b>signals.py</b> — автоматика</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. МОДЕЛИ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Данные</div>
+      <h2 class="rv d2">Модели</h2>
+      <p class="sub rv d3" style="margin-bottom:24px">12 таблиц. Ядро — аренда: она связывает машину, арендатора и даты.</p>
+      <div class="grid g2">
+        <div class="glass rv d4">
+          <div class="card-title" style="color:#8f8aff">Пользователи</div>
+          <div class="card-desc" style="margin-top:8px">
+            <b>User</b> — роли, телефон, верификация, рейтинги<br>
+            <b>VerificationCode</b> — коды email/SMS/сброс<br>
+            <b>AuditLog</b> — журнал действий (JSON-детали)
+          </div>
+        </div>
+        <div class="glass rv d5">
+          <div class="card-title" style="color:#8f8aff">Автомобили</div>
+          <div class="card-desc" style="margin-top:8px">
+            <b>Car</b> — характеристики, цена, локация, залог<br>
+            <b>CarImage</b> — фотографии<br>
+            <b>CarUnavailableDate</b> — заблокированные даты
+          </div>
+        </div>
+        <div class="glass rv d6">
+          <div class="card-title" style="color:#8f8aff">Аренда</div>
+          <div class="card-desc" style="margin-top:8px">
+            <b>Rental</b> — статусы, даты, total_price<br>
+            <b>Feedback</b> — отзывы на машину / на арендатора<br>
+            <b>Chat · ChatMessage</b> — переписка сторон
+          </div>
+        </div>
+        <div class="glass rv d7">
+          <div class="card-title" style="color:#8f8aff">Сообщество</div>
+          <div class="card-desc" style="margin-top:8px">
+            <b>Favorite</b> — избранное (без дублей)<br>
+            <b>Complaint</b> — жалобы со статусами и ответом админа<br>
+            <b>Rental 1─1 Chat</b> — чат создаётся автоматически
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6. РОЛИ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Права</div>
+      <h2 class="rv d2">Роли</h2>
+      <p class="sub rv d3" style="margin-bottom:26px">Каждый видит и может только своё. Права проверяются на уровне views и permissions.</p>
+      <div class="grid g3">
+        <div class="glass rv d4" style="border-top:2px solid #4F8CFF">
+          <div class="ic" style="background:rgba(79,140,255,.18)">R</div>
+          <div class="card-title">Арендатор <span style="color:var(--txt3);font-size:12px">· renter</span></div>
+          <div class="card-desc" style="margin-top:8px">берёт машины · создаёт аренды · отзывы на машину · чат · жалобы · избранное</div>
+        </div>
+        <div class="glass rv d5" style="border-top:2px solid #6C63FF">
+          <div class="ic" style="background:rgba(108,99,255,.18)">O</div>
+          <div class="card-title">Владелец <span style="color:var(--txt3);font-size:12px">· owner</span></div>
+          <div class="card-desc" style="margin-top:8px">добавляет машины · блокирует даты · подтверждает/отклоняет аренды · видит свой доход</div>
+        </div>
+        <div class="glass rv d6" style="border-top:2px solid #10B981">
+          <div class="ic" style="background:rgba(16,185,129,.18)">A</div>
+          <div class="card-title">Админ <span style="color:var(--txt3);font-size:12px">· staff</span></div>
+          <div class="card-desc" style="margin-top:8px">дашборд: пользователи, жалобы, аналитика, аудит. Не лезет в машины и аренды.</div>
+        </div>
+      </div>
+      <div class="rv d7" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">
+        <span class="chip"><b>is_staff</b> не выдаётся через API — защита от эскалации прав</span>
+        <span class="chip">отзыв меняет <b>только автор или админ</b></span>
+        <span class="chip">суперпользователя меняет <b>только суперпользователь</b></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 7. АВТОРИЗАЦИЯ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Авторизация</div>
+      <h2 class="rv d2">JWT-флоу</h2>
+      <div class="grid g2" style="margin-top:20px;align-items:center">
+        <div>
+          <div class="flow rv d4" style="flex-direction:column;align-items:stretch;gap:8px">
+            <div class="glass" style="display:flex;gap:12px;align-items:center"><span class="method m-post">POST</span><span class="mono">/register/</span><span style="color:var(--txt2);font-size:13px">создать аккаунт</span></div>
+            <div style="text-align:center;color:var(--a2);font-weight:800">↓</div>
+            <div class="glass" style="display:flex;gap:12px;align-items:center"><span class="method m-post">POST</span><span class="mono">/login/</span><span style="color:var(--txt2);font-size:13px">→ access + refresh</span></div>
+            <div style="text-align:center;color:var(--a2);font-weight:800">↓</div>
+            <div class="glass" style="display:flex;gap:12px;align-items:center"><span class="method m-get">ANY</span><span class="mono">Authorization: Bearer &lt;access&gt;</span></div>
+            <div style="text-align:center;color:var(--a2);font-weight:800">↓</div>
+            <div class="glass" style="display:flex;gap:12px;align-items:center"><span class="method m-post">POST</span><span class="mono">/token/refresh/</span><span style="color:var(--txt2);font-size:13px">продлить сессию</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="code rv d5"><span class="c">// POST /login/</span>
+{
+  <span class="p">"user"</span>: {
+    <span class="p">"id"</span>: 12,
+    <span class="p">"username"</span>: <span class="s">"ivan"</span>,
+    <span class="p">"is_owner"</span>: true,
+    <span class="p">"is_renter"</span>: true,
+    <span class="p">"is_staff"</span>: false  <span class="c">// редирект админа</span>
+  },
+  <span class="p">"access"</span>: <span class="s">"eyJ..."</span>,
+  <span class="p">"refresh"</span>: <span class="s">"eyJ..."</span>
+}</div>
+          <div class="rv d6" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+            <span class="chip">access <b>5 часов</b></span>
+            <span class="chip">refresh <b>30 дней</b> + ротация</span>
+            <span class="chip">логаут — <b>blacklist</b></span>
+          </div>
+          <div class="rv d7" style="margin-top:14px">
+            <span class="chip">смена пароля <span class="mono">/password/change/</span></span>
+            <span class="chip">сброс — код на email</span>
+            <span class="chip">верификация email/телефона</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 8. API ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">API</div>
+      <h2 class="rv d2">Эндпоинты</h2>
+      <p class="sub rv d3" style="margin-bottom:22px">Swagger: <span class="mono" style="color:var(--a2)">/docs/</span> · единая пагинация <span class="mono" style="color:var(--txt2)">{count, next, previous, results}</span></p>
+      <div class="grid g2">
+        <div class="glass rv d4">
+          <div class="card-title">Авторизация</div>
+          <div class="card-desc" style="margin-top:10px;display:grid;gap:6px">
+            <span><span class="method m-post">POST</span> <span class="mono">/register/ · /login/ · /logout/</span></span>
+            <span><span class="method m-get">GET</span> <span class="mono">/users/</span></span>
+            <span><span class="method m-post">POST</span> <span class="mono">/password/change/</span></span>
+            <span><span class="method m-post">POST</span> <span class="mono">/verification/send/</span></span>
+          </div>
+        </div>
+        <div class="glass rv d5">
+          <div class="card-title">Автомобили</div>
+          <div class="card-desc" style="margin-top:10px;display:grid;gap:6px">
+            <span><span class="method m-get">GET</span> <span class="mono">/car/?price__lte=&fuel_type=</span></span>
+            <span><span class="method m-get">GET</span> <span class="mono">/car/available/?start_date=&end_date=</span></span>
+            <span><span class="method m-get">GET</span> <span class="mono">/car/&lt;id&gt;/calendar/</span></span>
+            <span><span class="method m-post">POST</span> <span class="mono">/car/image/bulk-upload/</span></span>
+          </div>
+        </div>
+        <div class="glass rv d6">
+          <div class="card-title">Аренда</div>
+          <div class="card-desc" style="margin-top:10px;display:grid;gap:6px">
+            <span><span class="method m-post">POST</span> <span class="mono">/rental/</span> — создать заявку</span>
+            <span><span class="method m-post">POST</span> <span class="mono">/rental/&lt;id&gt;/confirm|reject/</span></span>
+            <span><span class="method m-post">POST</span> <span class="mono">/rental/&lt;id&gt;/start|complete/</span></span>
+            <span><span class="method m-patch">PATCH</span> <span class="mono">/rental/&lt;id&gt;/</span> — продление</span>
+          </div>
+        </div>
+        <div class="glass rv d7">
+          <div class="card-title">Сообщество</div>
+          <div class="card-desc" style="margin-top:10px;display:grid;gap:6px">
+            <span><span class="method m-get">GET</span> <span class="mono">/feedback/ · /favorites/ · /chat/</span></span>
+            <span><span class="method m-post">POST</span> <span class="mono">/chat/&lt;id&gt;/read/</span></span>
+            <span><span class="method m-post">POST</span> <span class="mono">/complaints/</span></span>
+          </div>
+        </div>
+        <div class="glass rv d5">
+          <div class="card-title">Дашборды</div>
+          <div class="card-desc" style="margin-top:10px;display:grid;gap:6px">
+            <span><span class="method m-get">GET</span> <span class="mono">/analytics/</span> — личный кабинет</span>
+            <span><span class="method m-get">GET</span> <span class="mono">/owner/stats/</span> — владелец</span>
+            <span><span class="method m-get">GET</span> <span class="mono">/operations/</span> — журнал (пагинация)</span>
+          </div>
+        </div>
+        <div class="glass rv d6">
+          <div class="card-title">Админка <span style="color:var(--txt3);font-size:11px">· только staff</span></div>
+          <div class="card-desc" style="margin-top:10px;display:grid;gap:6px">
+            <span><span class="method m-get">GET</span> <span class="mono">/admin/users/ · /admin/analytics/</span></span>
+            <span><span class="method m-patch">PATCH</span> <span class="mono">/admin/users/&lt;id&gt;/</span> — блокировка</span>
+            <span><span class="method m-get">GET</span> <span class="mono">/admin/operations/ · /admin/audit/</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 9. РЕАЛЬНЫЕ ЗАПРОСЫ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Live demo</div>
+      <h2 class="rv d2">Реальные запросы к API</h2>
+      <p class="sub rv d3" style="margin-bottom:20px">Сценарий снят с работающего бэкенда: регистрация → JWT → машина → аренда → отзыв. JWT-токены сокращены, вложенные объекты — фрагменты.</p>
+      <div class="glass rv d4" style="padding:0;overflow:hidden">
+        <div class="api-tabs" style="padding:12px 12px 0">
+          <button class="api-tab on">Регистрация</button>
+          <button class="api-tab">Логин → JWT</button>
+          <button class="api-tab">Машина</button>
+          <button class="api-tab">Бронирование</button>
+          <button class="api-tab">Календарь</button>
+          <button class="api-tab">Конфликт</button>
+          <button class="api-tab">Статистика</button>
+        </div>
+        <div class="api-body">
+          <div class="api-panel on">
+            <div class="api-row"><span class="method m-post">POST</span><span class="url">/register/</span></div>
+            <div class="api-label">Тело запроса</div>
+            <div class="api-box api-req">{
+  "username": "ivan",
+  "email": "ivan@mail.ru",
+  "password": "secret123"
+}</div>
+            <div class="api-label">Ответ <span class="status s-ok">201 Created</span></div>
+            <div class="api-box api-resp">{
+  "username": "ivan",
+  "email": "ivan@mail.ru",
+  "phone_number": null,
+  "is_owner": false
+}</div>
+          </div>
+          <div class="api-panel">
+            <div class="api-row"><span class="method m-post">POST</span><span class="url">/login/</span></div>
+            <div class="api-label">Тело запроса</div>
+            <div class="api-box api-req">{
+  "username": "ivan",
+  "password": "secret123"
+}</div>
+            <div class="api-label">Ответ <span class="status s-ok">200 OK</span></div>
+            <div class="api-box api-resp">{
+  "user": {
+    "id": 1,
+    "username": "ivan",
+    "email": "ivan@mail.ru",
+    "is_owner": false,
+    "is_renter": true,
+    "is_staff": false
+  },
+  "access": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}</div>
+            <div class="api-label">Дальше токен идёт в заголовок каждого запроса</div>
+            <div class="api-box api-req" style="border-left-color:var(--warn)">Authorization: Bearer <span class="g">&lt;access&gt;</span></div>
+          </div>
+          <div class="api-panel">
+            <div class="api-row"><span class="method m-post">POST</span><span class="url">/car/</span><span style="color:var(--txt3);font-size:11px">владелец dmitry</span></div>
+            <div class="api-label">Тело запроса</div>
+            <div class="api-box api-req">{
+  "brand": "Toyota",
+  "model_name": "Camry",
+  "year": 2021,
+  "fuel_type": "petrol",
+  "transmission": "auto",
+  "mileage": 45000,
+  "price_per_day": "50.00",
+  "location": "Москва",
+  "deposit": "100.00"
+}</div>
+            <div class="api-label">Ответ <span class="status s-ok">201 Created</span></div>
+            <div class="api-box api-resp">{
+  "id": 1,
+  "brand": "Toyota",
+  "model_name": "Camry",
+  "year": 2021,
+  "price_per_day": "50.00",
+  "location": "Москва",
+  "owner": {
+    "id": 2,
+    "username": "dmitry",
+    "is_owner": true,
+    <span class="g">...</span>
+  },
+  "is_available": true,
+  "average_rating": null
+}</div>
+          </div>
+          <div class="api-panel">
+            <div class="api-row"><span class="method m-post">POST</span><span class="url">/rental/</span><span style="color:var(--txt3);font-size:11px">арендатор ivan</span></div>
+            <div class="api-label">Тело запроса</div>
+            <div class="api-box api-req">{
+  "car_id": 1,
+  "start_date": "2026-09-02",
+  "end_date": "2026-09-06"
+}</div>
+            <div class="api-label">Ответ <span class="status s-ok">201 Created</span> — цена посчитана сервером</div>
+            <div class="api-box api-resp">{
+  "id": 1,
+  "car": {
+    "id": 1,
+    "brand": "Toyota",
+    "model_name": "Camry",
+    "price_per_day": "50.00"
+  },
+  "start_date": "2026-09-02",
+  "end_date": "2026-09-06",
+  "total_price": "250.00",   <span class="g">// 50 × 5 дней</span>
+  "status": "pending"
+}</div>
+            <div class="api-label">Владелец получил email/SMS: «ivan хочет арендовать Toyota Camry»</div>
+            <div class="api-box api-req" style="border-left-color:var(--warn)">Новая заявка → владельцу отправлено уведомление</div>
+          </div>
+          <div class="api-panel">
+            <div class="api-row"><span class="method m-get">GET</span><span class="url">/car/1/calendar/?year=2026&amp;month=9</span></div>
+            <div class="api-label">Ответ <span class="status s-ok">200 OK</span> — фрагмент</div>
+            <div class="api-box api-resp">{
+  "car_id": 1,
+  "year": 2026,
+  "month": 9,
+  "days": [
+    {"date": "2026-09-01", "status": "free"},
+    {"date": "2026-09-02", "status": "booked"},
+    <span class="g">...</span>
+    {"date": "2026-09-06", "status": "booked"},
+    {"date": "2026-09-07", "status": "free"},
+    <span class="g">...</span>
+  ]
+}</div>
+          </div>
+          <div class="api-panel">
+            <div class="api-row"><span class="method m-post">POST</span><span class="url">/rental/</span><span style="color:var(--txt3);font-size:11px">те же даты — гонка</span></div>
+            <div class="api-label">Тело запроса</div>
+            <div class="api-box api-req">{
+  "car_id": 1,
+  "start_date": "2026-09-04",
+  "end_date": "2026-09-08"
+}</div>
+            <div class="api-label">Ответ <span class="status s-err">400 Bad Request</span></div>
+            <div class="api-box api-resp err">{
+  "car": ["Автомобиль уже забронирован на выбранные даты"]
+}</div>
+          </div>
+          <div class="api-panel">
+            <div class="api-row"><span class="method m-get">GET</span><span class="url">/owner/stats/</span><span style="color:var(--txt3);font-size:11px">владелец dmitry</span></div>
+            <div class="api-label">Ответ <span class="status s-ok">200 OK</span></div>
+            <div class="api-box api-resp">{
+  "total_earnings": 250.0,
+  "total_rentals": 1,
+  "cars_count": 1,
+  "average_rating": 5.0,
+  "popular_car": {
+    "id": 1,
+    "brand": "Toyota",
+    "model_name": "Camry",
+    "rental_count": 1
+  },
+  "monthly_revenue": 250.0
+}</div>
+          </div>
+        </div>
+      </div>
+      <div class="rv d5" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+        <span class="chip">та же аренда прошла цикл: <b>pending → confirmed → active → completed</b></span>
+        <span class="chip">отзыв после завершения → <b>average_rating: 5.0</b></span>
+        <span class="chip">суммы видит <b>только владелец</b>, не админ</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 10. БИЗНЕС-ЛОГИКА ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Бизнес-логика</div>
+      <h2 class="rv d2">Жизненный цикл аренды</h2>
+      <div class="glass rv d4" style="margin-top:22px;padding:26px">
+        <div class="flow">
+          <div class="step" data-s="0">Заявка<br><span class="mono" style="font-size:11px;opacity:.7">pending</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="step" data-s="1">Подтверждена<br><span class="mono" style="font-size:11px;opacity:.7">confirmed</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="step" data-s="2">Активна<br><span class="mono" style="font-size:11px;opacity:.7">active</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="step" data-s="3">Завершена<br><span class="mono" style="font-size:11px;opacity:.7">completed</span></div>
+          <div class="flow-arrow bad">↷</div>
+          <div class="step" data-s="4">Отклонена<br><span class="mono" style="font-size:11px;opacity:.7">canceled</span></div>
+        </div>
+        <div style="margin-top:18px;display:flex;gap:12px;flex-wrap:wrap">
+          <span class="chip"><b>start</b> — начало аренды арендатором</span>
+          <span class="chip"><b>complete</b> — только после активной</span>
+          <span class="chip">отзыв — <b>только после завершения</b></span>
+        </div>
+      </div>
+      <div class="grid g3" style="margin-top:18px">
+        <div class="glass rv d5"><div class="card-title">Проверки дат</div><div class="card-desc">не в прошлом · конец > начала · нет пересечений с бронями и блокировками</div></div>
+        <div class="glass rv d6"><div class="card-title">Продление через PATCH</div><div class="card-desc">те же проверки пересечений + автопересчёт цены: цена_за_день × дней</div></div>
+        <div class="glass rv d7"><div class="card-title">Календарь</div><div class="card-desc">каждый день месяца: <span style="color:#34d399">free</span> · <span style="color:#fbbf24">booked</span> · <span style="color:#f87171">blocked</span> · past</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 10. ЗАЩИТА ОТ ГОНКИ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Надёжность</div>
+      <h2 class="rv d2">Защита от двойного бронирования</h2>
+      <p class="sub rv d3" style="margin-bottom:24px">Два человека бронируют одну машину одновременно — система не даёт им перекрыть даты.</p>
+      <div class="grid g2" style="align-items:center">
+        <div style="display:grid;gap:14px">
+          <div class="glass rv d4" style="display:flex;gap:12px;align-items:center">
+            <div class="ic" style="background:rgba(79,140,255,.18)">A</div>
+            <div><div class="card-title">Пользователь A</div><div class="card-desc">1–7 августа</div></div>
+          </div>
+          <div class="glass rv d5" style="display:flex;gap:12px;align-items:center">
+            <div class="ic" style="background:rgba(16,185,129,.18)">B</div>
+            <div><div class="card-title">Пользователь B</div><div class="card-desc">8 августа — ждёт</div></div>
+          </div>
+          <div class="glass rv d6" style="text-align:center;padding:14px;border-color:rgba(239,68,68,.35)">
+            <span style="font-weight:700;color:#f87171">Второй запрос блокируется и получает 400 «Автомобиль уже забронирован»</span>
+          </div>
+        </div>
+        <div>
+          <div class="glass rv d5" style="text-align:center;padding:34px 20px">
+            <div class="ic" style="margin:0 auto 14px;width:64px;height:64px;font-size:26px">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#cfc9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div class="card-title">Машина</div>
+            <div class="card-desc">блокировка строки через <span class="mono" style="color:#7ab0ff">select_for_update()</span></div>
+          </div>
+          <div class="rv d6" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:14px">
+            <span class="chip"><b>ATOMIC_REQUESTS</b> — запрос в одной транзакции</span>
+            <span class="chip">PostgreSQL/MySQL — работает; SQLite — no-op</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 11. АДМИНКА / БЕЗОПАСНОСТЬ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Администрирование</div>
+      <h2 class="rv d2">Дашборд админа и аудит</h2>
+      <p class="sub rv d3" style="margin-bottom:24px">Принцип маркетплейса: доходы пользователей для админа анонимны — он видит активность, но не суммы.</p>
+      <div class="grid g3">
+        <div class="glass rv d4"><div class="ic">AU</div><div class="card-title">Аудит действий</div><div class="card-desc">AuditLog фиксирует: регистрации, блокировки, верификацию, роли, статусы жалоб, ответы админа.</div></div>
+        <div class="glass rv d5"><div class="ic">PR</div><div class="card-title">Приватность финансов</div><div class="card-desc">В операциях и аналитике админа нет сумм. Доход видит только владелец в своём /analytics/.</div></div>
+        <div class="glass rv d6"><div class="ic">RO</div><div class="card-title">Журнал read-only</div><div class="card-desc">В админке Django журнал только для просмотра — записи нельзя подделать или удалить.</div></div>
+        <div class="glass rv d5"><div class="ic">SE</div><div class="card-title">Безопасность</div><div class="card-desc">CORS ограничен Vite-портом, throttle 100/1000 в час, пароли хэшируются, is_staff read-only.</div></div>
+        <div class="glass rv d6"><div class="ic">DA</div><div class="card-title">Управление</div><div class="card-desc">Пользователи, жалобы (статус + ответ), KPI платформы, топ машин по сдаваемости.</div></div>
+        <div class="glass rv d7"><div class="ic">RN</div><div class="card-title">Уведомления</div><div class="card-desc">Email/SMS: новая заявка, подтверждение/отказ, сообщение в чате, коды верификации.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 12. ТЕСТЫ ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Качество</div>
+      <h2 class="rv d2">Тестирование</h2>
+      <div class="grid g2" style="margin-top:22px;align-items:center">
+        <div class="glass rv d4" style="text-align:center;padding:34px">
+          <div class="num" data-count="128" style="font-size:92px;font-weight:800;background:linear-gradient(90deg,var(--a1),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent">0</div>
+          <div class="card-title" style="margin-top:6px">автотестов — все проходят</div>
+          <div class="card-desc" style="margin-top:8px"><span class="mono" style="color:#34d399">python manage.py test</span> → OK</div>
+        </div>
+        <div>
+          <div class="grid g2">
+            <div class="glass rv d5"><div class="card-title">Модели</div><div class="card-desc">роли, вычисляемые поля, рейтинги</div></div>
+            <div class="glass rv d6"><div class="card-title">Авторизация</div><div class="card-desc">регистрация, JWT, логин, is_staff</div></div>
+            <div class="glass rv d5"><div class="card-title">Аренда</div><div class="card-desc">цикл, конфликты, продление, гонка</div></div>
+            <div class="glass rv d6"><div class="card-title">Отзывы</div><div class="card-desc">участники, дубли, права автора</div></div>
+            <div class="glass rv d5"><div class="card-title">Чат</div><div class="card-desc">участники, прочитанное</div></div>
+            <div class="glass rv d6"><div class="card-title">Админка</div><div class="card-desc">блокировки, аудит, аналитика, пагинация</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="rv d7" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:20px">
+        <span class="chip">покрытие по всем 12 разделам API</span>
+        <span class="chip">проверка прав доступа на каждый сценарий</span>
+        <span class="chip">защита от регрессий при развитии фронта</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 13. ЗАПУСК ============ -->
+  <section class="slide">
+    <div class="wrap">
+      <div class="kicker rv d1">Быстрый старт</div>
+      <h2 class="rv d2">Запуск за 4 команды</h2>
+      <div class="grid g2" style="margin-top:22px;align-items:center">
+        <div class="glass rv d4" style="padding:6px;background:rgba(0,0,0,.3)">
+          <div class="term"><span class="pr">$</span> <span class="cm">pip install -r requirements.txt</span>
+<span class="pr">$</span> <span class="cm">cd avto</span>
+<span class="pr">$</span> <span class="cm">python manage.py migrate</span>
+<span class="out">Operations to perform: Apply all migrations... OK</span>
+<span class="pr">$</span> <span class="cm">python manage.py createsuperuser</span>
+<span class="pr">$</span> <span class="cm">python manage.py runserver</span>
+<span class="out">Starting development server at http://127.0.0.1:8000/<span class="cur"></span></span></div>
+        </div>
+        <div>
+          <div class="glass rv d5" style="display:flex;gap:12px;align-items:center">
+            <span class="method m-get">GET</span>
+            <div><div class="card-title">Swagger</div><div class="card-desc mono">/docs/ — попробовать любой эндпоинт</div></div>
+          </div>
+          <div class="glass rv d6" style="display:flex;gap:12px;align-items:center;margin-top:12px">
+            <span class="method m-get">GET</span>
+            <div><div class="card-title">Админка Django</div><div class="card-desc mono">/admin/ — управление данными</div></div>
+          </div>
+          <div class="glass rv d7" style="display:flex;gap:12px;align-items:center;margin-top:12px">
+            <span class="method m-get">GET</span>
+            <div><div class="card-title">CORS для фронта</div><div class="card-desc mono">localhost:5173 (Vite) уже разрешён</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 14. ФИНАЛ ============ -->
+  <section class="slide">
+    <div class="wrap" style="text-align:center;align-items:center;display:flex;flex-direction:column;gap:18px">
+      <div class="rv d1"><div class="logo" style="font-size:56px">AVTO<span style="color:var(--a2)">.</span></div></div>
+      <h2 class="rv d2" style="font-size:clamp(28px,4vw,46px)"><span class="grad">Бэкенд готов к фронту</span></h2>
+      <div class="sub rv d3" style="text-align:center;max-width:56ch">Полный цикл аренды · защита от двойного бронирования · админ-дашборд · аудит · 128 тестов</div>
+      <div class="rv d4" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:8px">
+        <span class="chip">оплата (ЮKassa / Stripe)</span>
+        <span class="chip">верификация документов</span>
+        <span class="chip">геопоиск</span>
+        <span class="chip">Docker + CI/CD</span>
+        <span class="chip">WebSocket-уведомления</span>
+        <span class="chip">PostgreSQL + HTTPS</span>
+      </div>
+      <div class="rv d5" style="margin-top:14px">
+        <span class="chip" style="padding:10px 20px;font-size:14px"><b>Следующий этап: React-фронтенд</b></span>
+      </div>
+      <div class="sub rv d6" style="font-size:12px;color:var(--txt3)">Документация: README.md · Swagger /docs/ · отчёт Avto_Backend_Report.docx</div>
+    </div>
+  </section>
+
+</main>
+
+<nav class="nav">
+  <button id="prev" title="Назад">‹</button>
+  <button id="next" title="Вперёд">›</button>
+</nav>
+<div class="foot"><span>AVTO Backend · 2026</span><span>Django 5.2 · DRF · JWT</span></div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length, cur = 0;
+  var bar = document.getElementById('bar');
+  var ctr = document.getElementById('ctr');
+  var dotsEl = document.getElementById('dots');
+  var prev = document.getElementById('prev');
+  var next = document.getElementById('next');
+
+  // точечная навигация
+  slides.forEach(function(_, i){
+    var b = document.createElement('button');
+    b.addEventListener('click', function(){ go(i); });
+    dotsEl.appendChild(b);
+  });
+  var dots = dotsEl.children;
+
+  function go(i){
+    cur = Math.max(0, Math.min(total - 1, i));
+    slides.forEach(function(s, k){ s.classList.toggle('active', k === cur); });
+    Array.prototype.forEach.call(dots, function(d, k){ d.classList.toggle('on', k === cur); });
+    bar.style.width = ((cur + 1) / total * 100) + '%';
+    ctr.textContent = (cur + 1) + ' / ' + total;
+    prev.disabled = cur === 0;
+    next.disabled = cur === total - 1;
+    animate(cur);
+  }
+
+  // анимация активного слайда
+  var animDone = {};
+  function animate(i){
+    if (animDone[i]) return;
+    var slide = slides[i];
+    // счётчики
+    slide.querySelectorAll('[data-count]').forEach(function(el){
+      var target = parseInt(el.getAttribute('data-count'), 10);
+      var t = 0, dur = 1300;
+      (function tick(){
+        t += 40;
+        var v = Math.round(target * Math.min(1, t / dur) * (1 + 0.2 * Math.sin(t / dur * Math.PI)));
+        if (t >= dur) v = target;
+        el.textContent = v;
+        if (t < dur) requestAnimationFrame(tick);
+      })();
+    });
+    // статусы аренды: последовательная подсветка
+    var steps = slide.querySelectorAll('.step');
+    if (steps.length){
+      steps.forEach(function(st){ st.classList.remove('on'); });
+      var k = 0;
+      (function light(){
+        if (k < steps.length){
+          steps[k].classList.add('on');
+          k++;
+          setTimeout(light, 550);
+        }
+      })();
+    }
+    animDone[i] = true;
+  }
+
+  // клавиатура
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(cur + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(cur - 1); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(total - 1);
+    else if (e.key.toLowerCase() === 'f') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
+  });
+  prev.addEventListener('click', function(){ go(cur - 1); });
+  next.addEventListener('click', function(){ go(cur + 1); });
+  document.addEventListener('click', function(e){ if (e.target.closest && e.target.closest('.slide')) return; });
+
+  // вкладки API-примеров
+  document.querySelectorAll('.api-tabs').forEach(function(bar){
+    var panels = Array.prototype.slice.call(bar.parentElement.querySelectorAll('.api-panel'));
+    var btns = Array.prototype.slice.call(bar.children);
+    btns.forEach(function(btn, k){
+      btn.addEventListener('click', function(){
+        btns.forEach(function(b){ b.classList.remove('on'); });
+        btn.classList.add('on');
+        panels.forEach(function(p, j){ p.classList.toggle('on', j === k); });
+      });
+    });
+  });
+
+  go(0);
+})();
+</script>
+</body>
+</html>

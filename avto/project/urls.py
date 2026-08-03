@@ -15,11 +15,11 @@ from .views import (
     CarCalendarAPIView,
     FavoriteListAPIView, FavoriteDeleteAPIView,
     RentalListAPIView, RentalDetailAPIView,
-    RentalConfirmAPIView, RentalRejectAPIView, RentalCompleteAPIView,
+    RentalConfirmAPIView, RentalRejectAPIView, RentalStartAPIView, RentalCompleteAPIView,
     FeedbackViewSet,
-    ChatListAPIView, ChatDetailAPIView, ChatMessageCreateAPIView,
+    ChatListAPIView, ChatDetailAPIView, ChatMessageCreateAPIView, ChatMarkReadAPIView,
     ComplaintListAPIView, ComplaintDetailAPIView,
-    PasswordResetRequestAPIView, PasswordResetConfirmAPIView,
+    PasswordResetRequestAPIView, PasswordResetConfirmAPIView, PasswordChangeAPIView,
     StatsAPIView, OwnerStatsAPIView,
     UserOperationsAPIView, AnalyticsAPIView,
     AdminUserListAPIView, AdminUserDetailAPIView,
@@ -69,11 +69,13 @@ urlpatterns = [
     path('rental/<int:pk>/', RentalDetailAPIView.as_view(), name='rental_detail'),
     path('rental/<int:pk>/confirm/', RentalConfirmAPIView.as_view(), name='rental_confirm'),
     path('rental/<int:pk>/reject/', RentalRejectAPIView.as_view(), name='rental_reject'),
+    path('rental/<int:pk>/start/', RentalStartAPIView.as_view(), name='rental_start'),
     path('rental/<int:pk>/complete/', RentalCompleteAPIView.as_view(), name='rental_complete'),
 
     # Чат
     path('chat/', ChatListAPIView.as_view(), name='chat_list'),
     path('chat/<int:pk>/', ChatDetailAPIView.as_view(), name='chat_detail'),
+    path('chat/<int:pk>/read/', ChatMarkReadAPIView.as_view(), name='chat_mark_read'),
     path('chat/message/', ChatMessageCreateAPIView.as_view(), name='chat_message_create'),
 
     # Жалобы
@@ -83,6 +85,9 @@ urlpatterns = [
     # Сброс пароля
     path('password/reset/', PasswordResetRequestAPIView.as_view(), name='password_reset'),
     path('password/reset/confirm/', PasswordResetConfirmAPIView.as_view(), name='password_reset_confirm'),
+
+    # Смена пароля авторизованного пользователя
+    path('password/change/', PasswordChangeAPIView.as_view(), name='password_change'),
 
     # Статистика
     path('stats/', StatsAPIView.as_view(), name='stats'),

@@ -11,6 +11,7 @@
 
 import io
 from datetime import date, timedelta
+from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -119,6 +120,23 @@ class CarModelTests(TestCase):
         Feedback.objects.create(rental=rental2, feedback_type='car', author=renter2, rating=5, comment='Great')
         self.assertEqual(car.average_rating, 4.5)
 
+    def test_average_rating_ignores_renter_feedback(self):
+        # Отзыв на арендатора (feedback_type='renter') не должен влиять
+        # на рейтинг автомобиля
+        car = Car.objects.create(
+            owner=self.owner, brand='Toyota', model_name='Camry', year=2020,
+            fuel_type='petrol', transmission='auto', mileage=50000,
+            price_per_day=50, description='Nice car', location='Moscow'
+        )
+        renter = User.objects.create_user(username='renter1', password='pass123')
+        rental = Rental.objects.create(
+            car=car, renter=renter, start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 5), total_price=250, status='completed'
+        )
+        Feedback.objects.create(rental=rental, feedback_type='renter', author=self.owner, rating=1, comment='Bad renter')
+        self.assertIsNone(car.average_rating)
+        self.assertEqual(car.feedbacks_count, 0)
+
     def test_car_ordering(self):
         Car.objects.create(
             owner=self.owner, brand='A', model_name='A', year=2020,
@@ -183,6 +201,14 @@ class AuthAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('access', response.data)
         self.assertIn('refresh', response.data)
+
+    def test_login_returns_is_staff(self):
+        # Фронтенду нужен is_staff, чтобы заредиректить админа на /admin/dashboard/
+        admin = User.objects.create_user(username='admin', password='testpass123', email='a@t.com', is_staff=True)
+        response = self.client.post(reverse('login'), {'username': 'admin', 'password': 'testpass123'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['user']['is_staff'])
+        self.assertEqual(response.data['user']['is_owner'], False)
 
     def test_login_wrong_password(self):
         User.objects.create_user(username='testuser', password='testpass123', email='t@t.com')
@@ -488,6 +514,163 @@ class RentalAPITests(APITestCase):
                                     HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_start_rental(self):
+        # confirmed → active: арендатор начинает аренду (раньше этого перехода не было)
+        rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='confirmed'
+        )
+        response = self.client.post(f'/rental/{rental.id}/start/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rental.refresh_from_db()
+        self.assertEqual(rental.status, 'active')
+
+    def test_start_rental_not_renter(self):
+        rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='confirmed'
+        )
+        response = self.client.post(f'/rental/{rental.id}/start/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_start_rental_wrong_status(self):
+        # Нельзя начать аренду, пока она не подтверждена
+        rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='pending'
+        )
+        response = self.client.post(f'/rental/{rental.id}/start/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_full_rental_lifecycle(self):
+        # Полный путь: создание → подтверждение → начало → завершение.
+        # Без эндпоинта start/ дойти до completed было невозможно.
+        response = self.client.post(reverse('rental_list'), self.rental_data,
+                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}',
+                                    format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        rental_id = response.data['id']
+
+        response = self.client.post(f'/rental/{rental_id}/confirm/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'confirmed')
+
+        response = self.client.post(f'/rental/{rental_id}/start/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'active')
+
+        response = self.client.post(f'/rental/{rental_id}/complete/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'completed')
+
+    def test_create_rental_other_dates_while_booked(self):
+        # Машина уже занята 28-32, но мы бронируем 35-38 — раньше это
+        # падало, т.к. car_id фильтровался по is_available=True
+        Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=28),
+            end_date=date.today() + timedelta(days=32),
+            total_price=250, status='confirmed'
+        )
+        data = {
+            'car_id': self.car.id,
+            'start_date': (date.today() + timedelta(days=35)).isoformat(),
+            'end_date': (date.today() + timedelta(days=38)).isoformat(),
+        }
+        response = self.client.post(reverse('rental_list'), data,
+                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}',
+                                    format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_extend_rental_conflicts_with_other_booking(self):
+        # Сценарий: A занял 30-35, B забронировал 35-36. A пытается продлить
+        # аренду до 38 через PATCH → конфликт с бронью B → 400.
+        rental_a = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='confirmed'
+        )
+        renter_b = User.objects.create_user(username='renter_b', password='pass123')
+        Rental.objects.create(
+            car=self.car, renter=renter_b,
+            start_date=date.today() + timedelta(days=35),
+            end_date=date.today() + timedelta(days=36),
+            total_price=100, status='pending'
+        )
+        response = self.client.patch(f'/rental/{rental_a.id}/',
+                                     {'end_date': (date.today() + timedelta(days=38)).isoformat()},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}',
+                                     format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        rental_a.refresh_from_db()
+        self.assertEqual(rental_a.end_date, date.today() + timedelta(days=35))
+
+    def test_extend_rental_free_dates(self):
+        # Продление на свободные даты проходит и цена пересчитывается:
+        # 30-35 (6 дней × 50 = 300) → 30-38 (9 дней × 50 = 450)
+        rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='confirmed'
+        )
+        response = self.client.patch(f'/rental/{rental.id}/',
+                                     {'end_date': (date.today() + timedelta(days=38)).isoformat()},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}',
+                                     format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rental.refresh_from_db()
+        self.assertEqual(rental.end_date, date.today() + timedelta(days=38))
+        self.assertEqual(rental.total_price, 450)
+
+    def test_rental_status_and_price_not_editable_via_patch(self):
+        # Статус и цену через PATCH поменять нельзя: статус — только через
+        # /confirm/, /reject/, /start/, /complete/, цена — автоматический расчёт
+        rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='pending'
+        )
+        response = self.client.patch(f'/rental/{rental.id}/',
+                                     {'status': 'completed', 'total_price': 1},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}',
+                                     format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rental.refresh_from_db()
+        self.assertEqual(rental.status, 'pending')
+        self.assertEqual(rental.total_price, 300)
+
+    def test_rental_creation_locks_car_row(self):
+        # Проверка, что при создании аренды строка машины блокируется
+        # select_for_update() — защита от двойного бронирования при гонке.
+        with mock.patch.object(Car.objects, 'select_for_update',
+                               wraps=Car.objects.select_for_update) as mock_lock:
+            response = self.client.post(reverse('rental_list'), self.rental_data,
+                                        HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}',
+                                        format='json')
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            self.assertTrue(mock_lock.called)
+
+    def test_atomic_requests_enabled(self):
+        # select_for_update требует, чтобы запрос выполнялся в одной транзакции.
+        # Если ATOMIC_REQUESTS выключили, защита от гонки перестанет работать.
+        from django.conf import settings
+        self.assertTrue(settings.DATABASES['default'].get('ATOMIC_REQUESTS'))
+
     def test_create_rental_overlapping_dates(self):
         Rental.objects.create(
             car=self.car, renter=self.renter,
@@ -716,6 +899,32 @@ class ChatAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('messages', response.data)
 
+    def test_mark_messages_read(self):
+        ChatMessage.objects.create(chat=self.chat, sender=self.renter, message='Hi')
+        response = self.client.post(f'/chat/{self.chat.id}/read/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['updated'], 1)
+        self.assertTrue(ChatMessage.objects.get().is_read)
+
+    def test_mark_read_only_other_party_messages(self):
+        # Прочитанными помечаются сообщения собеседника, свои — нет
+        ChatMessage.objects.create(chat=self.chat, sender=self.renter, message='from renter')
+        ChatMessage.objects.create(chat=self.chat, sender=self.owner, message='own message')
+        response = self.client.post(f'/chat/{self.chat.id}/read/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        msgs = ChatMessage.objects.all()
+        self.assertTrue(msgs.get(sender=self.renter).is_read)
+        self.assertFalse(msgs.get(sender=self.owner).is_read)
+
+    def test_mark_read_not_participant(self):
+        stranger = User.objects.create_user(username='stranger2', password='pass123')
+        stranger_tokens = get_tokens(stranger)
+        response = self.client.post(f'/chat/{self.chat.id}/read/',
+                                    HTTP_AUTHORIZATION=f'Bearer {stranger_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 class ComplaintAPITests(APITestCase):
     # Тесты жалоб: создание, список своих жалоб, обязательная авторизация
@@ -824,6 +1033,38 @@ class PasswordResetAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class PasswordChangeAPITests(APITestCase):
+    # Тесты смены пароля авторизованного пользователя (старый + новый пароль)
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='user', password='pass123', email='u@t.com')
+        self.tokens = get_tokens(self.user)
+
+    def test_change_password(self):
+        response = self.client.post(reverse('password_change'),
+                                    {'old_password': 'pass123', 'new_password': 'newpass123'},
+                                    HTTP_AUTHORIZATION=f'Bearer {self.tokens["access"]}',
+                                    format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('newpass123'))
+
+    def test_change_password_wrong_old(self):
+        response = self.client.post(reverse('password_change'),
+                                    {'old_password': 'wrong', 'new_password': 'newpass123'},
+                                    HTTP_AUTHORIZATION=f'Bearer {self.tokens["access"]}',
+                                    format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('pass123'))
+
+    def test_change_password_unauthorized(self):
+        response = self.client.post(reverse('password_change'),
+                                    {'old_password': 'pass123', 'new_password': 'newpass123'},
+                                    format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class CalendarAPITests(APITestCase):
     # Тесты календаря доступности: отдаёт статус каждого дня месяца (free/booked/blocked/past)
 
@@ -880,6 +1121,24 @@ class AvailableCarAPITests(APITestCase):
             f'{reverse("car_available")}?start_date={start.isoformat()}&end_date={end.isoformat()}'
         )
         self.assertNotIn(self.car.id, [c['id'] for c in response.data['results']])
+
+    def test_available_cars_with_active_rental_on_other_dates(self):
+        # Машина занята на даты 30-35, но свободна на 10-15:
+        # раньше is_available=False исключал её из выдачи на ЛЮБЫЕ даты
+        renter = User.objects.create_user(username='renter', password='pass123')
+        Rental.objects.create(
+            car=self.car, renter=renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='confirmed'
+        )
+        free_start = date.today() + timedelta(days=10)
+        free_end = date.today() + timedelta(days=15)
+        response = self.client.get(
+            f'{reverse("car_available")}?start_date={free_start.isoformat()}&end_date={free_end.isoformat()}'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(self.car.id, [c['id'] for c in response.data['results']])
 
 
 class StatsAPITests(APITestCase):
@@ -1099,18 +1358,35 @@ class OperationsAPITests(APITestCase):
         response = self.client.get(reverse('operations'),
                                    HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['type'], 'rental')
-        self.assertEqual(response.data[0]['status'], 'completed')
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['type'], 'rental')
+        self.assertEqual(response.data['results'][0]['status'], 'completed')
 
     def test_admin_operations(self):
         response = self.client.get(reverse('admin_operations'),
                                    HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data[0]['renter'], 'renter')
-        self.assertEqual(response.data[0]['owner'], 'owner')
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['renter'], 'renter')
+        self.assertEqual(response.data['results'][0]['owner'], 'owner')
         # Админ не должен видеть суммы операций (финансы пользователей анонимны)
-        self.assertNotIn('amount', response.data[0])
+        self.assertNotIn('amount', response.data['results'][0])
+
+    def test_operations_pagination(self):
+        # Больше записей, чем page_size (20) — отдаётся пагинированный ответ
+        for _ in range(5):
+            Rental.objects.create(
+                car=self.car, renter=self.renter,
+                start_date=date(2026, 1, 1), end_date=date(2026, 1, 3),
+                total_price=100, status='completed'
+            )
+        response = self.client.get(reverse('operations'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 6)  # 5 новых + 1 из setUp
+        self.assertIn('next', response.data)
+        self.assertIn('previous', response.data)
+        self.assertIsInstance(response.data['results'], list)
 
     def test_operations_unauthorized(self):
         response = self.client.get(reverse('operations'))

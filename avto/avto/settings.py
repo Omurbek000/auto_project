@@ -89,6 +89,10 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        # Каждый HTTP-запрос выполняется в одной транзакции. Нужно для
+        # select_for_update() при бронировании: пока первый запрос не закоммитится,
+        # второй «ждёт» и уже видит его бронь — защита от двойного бронирования.
+        'ATOMIC_REQUESTS': True,
     }
 }
 

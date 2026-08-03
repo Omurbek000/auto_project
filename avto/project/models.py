@@ -118,12 +118,14 @@ class Car(models.Model):
 
     @property
     def average_rating(self):
-        avg = self.rentals.filter(feedbacks__isnull=False).aggregate(Avg('feedbacks__rating'))['feedbacks__rating__avg']
+        # Считаем ТОЛЬКО отзывы на автомобиль (feedback_type='car').
+        # Отзывы на арендатора (feedback_type='renter') не должны влиять на рейтинг машины.
+        avg = self.rentals.filter(feedbacks__feedback_type='car').aggregate(Avg('feedbacks__rating'))['feedbacks__rating__avg']
         return round(avg, 2) if avg else None
 
     @property
     def feedbacks_count(self):
-        return self.rentals.filter(feedbacks__isnull=False).count()
+        return self.rentals.filter(feedbacks__feedback_type='car').count()
 
     class Meta:
         ordering = ['-created_date']  # Сортировка: новые сверху
