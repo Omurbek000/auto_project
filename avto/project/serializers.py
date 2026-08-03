@@ -5,7 +5,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import date
 
-from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode
+from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode, AuditLog
 
 
 # Сериализатор регистрации нового пользователя
@@ -203,6 +203,15 @@ class RentalListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['renter', 'total_price', 'status']  # Проставляются автоматически
 
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get('request')
+        # Скрываем цену аренды от админа: это маркетплейс, доходы пользователей
+        # анонимны. Владелец и арендатор свою цену видят, админ — нет.
+        if request and getattr(request.user, 'is_staff', False):
+            fields.pop('total_price', None)
+        return fields
+
     def validate(self, data):
         # Проверка дат и доступности автомобиля
         start = data.get('start_date')
@@ -268,6 +277,14 @@ class RentalDetailSerializer(serializers.ModelSerializer):
             'id', 'car', 'renter',
             'start_date', 'end_date', 'total_price', 'status', 'created_date',
         ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get('request')
+        # Скрываем цену аренды от админа (см. RentalListSerializer)
+        if request and getattr(request.user, 'is_staff', False):
+            fields.pop('total_price', None)
+        return fields
 
 
 # Сериализатор отзыва
@@ -372,6 +389,52 @@ class ComplaintSerializer(serializers.ModelSerializer):
             'created_date', 'updated_date'
         ]
         read_only_fields = ['author', 'status', 'admin_response']
+
+
+# Сериализатор админа для управления пользователями.
+# В отличие от UserSerializer, позволяет менять блокировку (is_active),
+# верификацию (is_verified) и роли (is_owner/is_renter).
+# is_staff — read_only: выдавать права админа может только суперпользователь
+# через Django-админку (защита от эскалации прав через API).
+class AdminUserSerializer(serializers.ModelSerializer):
+    age = serializers.ReadOnlyField()
+    driving_experience = serializers.ReadOnlyField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'first_name', 'last_name', 'email', 'phone_number',
+            'is_active', 'is_owner', 'is_renter', 'is_staff',
+            'is_verified', 'email_verified', 'phone_verified',
+            'age', 'driving_experience', 'created_date',
+        ]
+        extra_kwargs = {'is_staff': {'read_only': True}}
+
+
+# Сериализатор админа для жалоб.
+# У обычного пользователя status и admin_response — read_only,
+# админ же может менять статус жалобы и писать ответ.
+class AdminComplaintSerializer(serializers.ModelSerializer):
+    author = UserSerializer(read_only=True)
+    target_user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = Complaint
+        fields = [
+            'id', 'author', 'target_user', 'rental',
+            'reason', 'description', 'status', 'admin_response',
+            'created_date', 'updated_date'
+        ]
+        read_only_fields = ['author', 'target_user', 'rental']
+
+
+# Сериализатор записи журнала аудита (только чтение — записи создаются системой)
+class AuditLogSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True, default=None)
+
+    class Meta:
+        model = AuditLog
+        fields = ['id', 'user', 'username', 'action', 'model_name', 'object_id', 'details', 'created_date']
 
 
 # Сериализатор запроса кода верификации

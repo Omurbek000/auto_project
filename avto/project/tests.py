@@ -21,7 +21,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode
+from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode, AuditLog
 
 
 def get_tokens(user):
@@ -500,6 +500,34 @@ class RentalAPITests(APITestCase):
                                     format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_rental_price_hidden_from_admin(self):
+        # Админ не видит цены аренды (финансы пользователей анонимны)
+        admin = User.objects.create_user(username='admin', password='pass123', is_staff=True)
+        admin_tokens = get_tokens(admin)
+        Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='pending'
+        )
+        response = self.client.get(reverse('rental_list'),
+                                   HTTP_AUTHORIZATION=f'Bearer {admin_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('total_price', response.data['results'][0])
+
+    def test_rental_price_visible_to_participants(self):
+        # Участник (арендатор) видит цену своей аренды
+        Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date.today() + timedelta(days=30),
+            end_date=date.today() + timedelta(days=35),
+            total_price=300, status='pending'
+        )
+        response = self.client.get(reverse('rental_list'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('total_price', response.data['results'][0])
+
 
 class FeedbackAPITests(APITestCase):
     # Тесты отзывов: создание (только участники завершённой аренды),
@@ -906,3 +934,236 @@ class CarUnavailableDateAPITests(APITestCase):
                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
+
+
+class AdminUserAPITests(APITestCase):
+    # Тесты админ-управления пользователями (для дашборда админа во фронте):
+    # список, блокировка, верификация, назначение ролей — только для staff
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='admin', password='pass123', is_staff=True)
+        self.admin_tokens = get_tokens(self.admin)
+        self.user = User.objects.create_user(username='user', password='pass123', email='u@t.com')
+
+    def test_admin_list_users(self):
+        response = self.client.get(reverse('admin_users_list'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+
+    def test_admin_users_forbidden_for_regular_user(self):
+        user_tokens = get_tokens(self.user)
+        response = self.client.get(reverse('admin_users_list'),
+                                   HTTP_AUTHORIZATION=f'Bearer {user_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_block_user(self):
+        # Блокировка = is_active: False (пользователь не сможет зайти)
+        response = self.client.patch(f'/admin/users/{self.user.id}/', {'is_active': False},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_admin_verify_user(self):
+        # Подтверждение личности
+        response = self.client.patch(f'/admin/users/{self.user.id}/', {'is_verified': True},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_verified)
+
+    def test_admin_assign_owner_role(self):
+        # Назначение роли владельца
+        response = self.client.patch(f'/admin/users/{self.user.id}/', {'is_owner': True},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_owner)
+
+    def test_admin_cannot_change_superuser(self):
+        # Обычный staff не может менять суперпользователя
+        superuser = User.objects.create_superuser(username='root', password='pass123')
+        response = self.client.patch(f'/admin/users/{superuser.id}/', {'is_active': False},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AdminComplaintAPITests(APITestCase):
+    # Тесты: админ может менять статус жалобы и отвечать на неё через API
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='admin', password='pass123', is_staff=True)
+        self.admin_tokens = get_tokens(self.admin)
+        self.user = User.objects.create_user(username='user', password='pass123', email='u@t.com')
+        self.user_tokens = get_tokens(self.user)
+        self.target = User.objects.create_user(username='target', password='pass123', email='t@t.com')
+        self.complaint = Complaint.objects.create(
+            author=self.user, target_user=self.target, reason='Spam', description='x'
+        )
+
+    def test_admin_update_complaint_status_and_response(self):
+        response = self.client.patch(f'/complaints/{self.complaint.id}/', {
+            'status': 'resolved', 'admin_response': 'Мы разобрались'
+        }, HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.complaint.refresh_from_db()
+        self.assertEqual(self.complaint.status, 'resolved')
+        self.assertEqual(self.complaint.admin_response, 'Мы разобрались')
+
+    def test_user_cannot_change_status(self):
+        # У обычного пользователя поля status/admin_response — read_only
+        response = self.client.patch(f'/complaints/{self.complaint.id}/', {'status': 'resolved'},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.user_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.complaint.refresh_from_db()
+        self.assertEqual(self.complaint.status, 'pending')
+
+
+class AnalyticsAPITests(APITestCase):
+    # Тесты аналитики: личный кабинет (свой дашборд) и дашборд админа
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username='owner', password='pass123', is_owner=True, email='o@t.com')
+        self.owner_tokens = get_tokens(self.owner)
+        self.admin = User.objects.create_user(username='admin', password='pass123', is_staff=True)
+        self.admin_tokens = get_tokens(self.admin)
+        self.renter = User.objects.create_user(username='renter', password='pass123', email='rr@t.com')
+        self.car = Car.objects.create(
+            owner=self.owner, brand='Toyota', model_name='Camry', year=2020,
+            fuel_type='petrol', transmission='auto', mileage=50000,
+            price_per_day=50, description='', location='Moscow'
+        )
+        # Аренда на 5 дней (1-5 января). Status completed — сигналы не создают чат
+        self.rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date(2025, 1, 1), end_date=date(2025, 1, 5),
+            total_price=250, status='completed'
+        )
+
+    def test_owner_analytics(self):
+        response = self.client.get(reverse('analytics'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('rentals_by_status', response.data)
+        self.assertIn('revenue_by_month', response.data)
+        self.assertIn('cars_by_brand', response.data)
+        # Сдаваемость: машина сдавалась 5 дней, 1 аренда
+        self.assertIn('cars_rental_days', response.data)
+        self.assertEqual(response.data['cars_rental_days'][0]['rental_days'], 5)
+        self.assertEqual(response.data['cars_rental_days'][0]['rentals_count'], 1)
+
+    def test_admin_analytics(self):
+        response = self.client.get(reverse('admin_analytics'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('cars_by_brand', response.data)
+        self.assertIn('rental_statuses', response.data)
+        # Активность без денег: есть число аренд по месяцам, НЕТ доходов
+        self.assertIn('rentals_by_month', response.data)
+        self.assertNotIn('revenue_total', response.data)
+        self.assertNotIn('revenue_by_month', response.data)
+        # Топ машин по дням на всей платформе
+        self.assertIn('top_cars_by_days', response.data)
+        self.assertEqual(response.data['top_cars_by_days'][0]['rental_days'], 5)
+        self.assertEqual(response.data['rental_days_total'], 5)
+
+    def test_admin_analytics_forbidden_for_regular_user(self):
+        response = self.client.get(reverse('admin_analytics'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class OperationsAPITests(APITestCase):
+    # Тесты журнала операций: у пользователя — свои, у админа — все
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username='owner', password='pass123', is_owner=True, email='o@t.com')
+        self.renter = User.objects.create_user(username='renter', password='pass123', email='r@t.com')
+        self.admin = User.objects.create_user(username='admin', password='pass123', is_staff=True)
+        self.renter_tokens = get_tokens(self.renter)
+        self.admin_tokens = get_tokens(self.admin)
+        self.car = Car.objects.create(
+            owner=self.owner, brand='Toyota', model_name='Camry', year=2020,
+            fuel_type='petrol', transmission='auto', mileage=50000,
+            price_per_day=50, description='', location='Moscow'
+        )
+        # Статус completed — чтобы сигналы не создавали чат и не слали уведомления
+        self.rental = Rental.objects.create(
+            car=self.car, renter=self.renter,
+            start_date=date(2025, 1, 1), end_date=date(2025, 1, 5),
+            total_price=250, status='completed'
+        )
+
+    def test_user_operations(self):
+        response = self.client.get(reverse('operations'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.renter_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['type'], 'rental')
+        self.assertEqual(response.data[0]['status'], 'completed')
+
+    def test_admin_operations(self):
+        response = self.client.get(reverse('admin_operations'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data[0]['renter'], 'renter')
+        self.assertEqual(response.data[0]['owner'], 'owner')
+        # Админ не должен видеть суммы операций (финансы пользователей анонимны)
+        self.assertNotIn('amount', response.data[0])
+
+    def test_operations_unauthorized(self):
+        response = self.client.get(reverse('operations'))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class AuditLogAPITests(APITestCase):
+    # Тесты журнала аудита: запись при важных действиях и просмотр только админом
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='admin', password='pass123', is_staff=True)
+        self.admin_tokens = get_tokens(self.admin)
+        self.target = User.objects.create_user(username='target', password='pass123', email='t@t.com')
+
+    def test_admin_list_audit(self):
+        response = self.client.get(reverse('admin_audit'),
+                                   HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('results', response.data)
+
+    def test_audit_forbidden_for_regular_user(self):
+        user = User.objects.create_user(username='user', password='pass123')
+        tokens = get_tokens(user)
+        response = self.client.get(reverse('admin_audit'),
+                                   HTTP_AUTHORIZATION=f'Bearer {tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_register_creates_audit(self):
+        response = self.client.post(reverse('register'), {
+            'username': 'newuser', 'email': 'n@t.com', 'password': 'pass123'
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(AuditLog.objects.filter(action='user.registered').exists())
+
+    def test_block_user_creates_audit(self):
+        response = self.client.patch(f'/admin/users/{self.target.id}/', {'is_active': False},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(AuditLog.objects.filter(action='user.blocked', user=self.admin).exists())
+
+    def test_complaint_status_creates_audit(self):
+        complaint = Complaint.objects.create(
+            author=self.target, target_user=self.admin, reason='Spam', description='x'
+        )
+        response = self.client.patch(f'/complaints/{complaint.id}/', {'status': 'resolved'},
+                                     HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(AuditLog.objects.filter(action='complaint.status_changed').exists())
+
+    def test_regular_edit_does_not_create_audit(self):
+        # Обычное редактирование профиля пользователем НЕ пишется в аудит
+        user_tokens = get_tokens(self.target)
+        response = self.client.patch(f'/users/{self.target.id}/', {'first_name': 'John'},
+                                     HTTP_AUTHORIZATION=f'Bearer {user_tokens["access"]}', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(AuditLog.objects.count(), 0)

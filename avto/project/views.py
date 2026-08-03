@@ -8,7 +8,8 @@ from django.utils import timezone
 from calendar import monthrange
 
 from django.contrib.auth.models import AnonymousUser
-from django.db.models import Sum, Count, Avg
+from django.db.models import Sum, Count, Avg, Q
+from django.db.models.functions import TruncMonth
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, generics, permissions, status
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -17,8 +18,8 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .filters import CarFilter, RentalFilter, FeedbackFilter
-from .models import Car, CarImage, CarUnavailableDate, Rental, Feedback, VerificationCode, User, Complaint, Chat, ChatMessage, Favorite
-from .pagination import CarPagination, RentalPagination, FeedbackPagination, ChatPagination, ComplaintPagination
+from .models import Car, CarImage, CarUnavailableDate, Rental, Feedback, VerificationCode, User, Complaint, Chat, ChatMessage, Favorite, AuditLog
+from .pagination import CarPagination, RentalPagination, FeedbackPagination, ChatPagination, ComplaintPagination, AuditLogPagination
 from .permissions import IsOwnerOrAdmin, IsOwnerOrReadOnly, IsRentalParticipant
 from .serializers import (
     RegisterSerializer, CustomLoginSerializer, LogoutSerializer,
@@ -28,8 +29,28 @@ from .serializers import (
     FeedbackSerializer, FavoriteSerializer, ChatSerializer, ChatMessageSerializer,
     ComplaintSerializer, VerificationCodeSerializer, VerificationConfirmSerializer,
     PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+    AdminUserSerializer, AdminComplaintSerializer, AuditLogSerializer,
 )
-from .services import send_sms, send_email
+from .services import send_sms, send_email, log_action
+
+
+# Вспомогательная функция: сколько дней сдавалась каждая машина (без учёта цены).
+# Считает все неотменённые аренды из переданного queryset.
+# Возвращает список словарей {car_id, car, rental_days, rentals_count},
+# отсортированный от самой сдаваемой машины к менее сдаваемой.
+def _rental_days_by_car(queryset):
+    days_per_car = {}
+    for rental in queryset.exclude(status='canceled'):
+        days = (rental.end_date - rental.start_date).days + 1
+        entry = days_per_car.setdefault(rental.car_id, {
+            'car_id': rental.car_id,
+            'car': f'{rental.car.brand} {rental.car.model_name} ({rental.car.year})',
+            'rental_days': 0,
+            'rentals_count': 0,
+        })
+        entry['rental_days'] += days
+        entry['rentals_count'] += 1
+    return sorted(days_per_car.values(), key=lambda x: x['rental_days'], reverse=True)
 
 
 # Регистрация нового пользователя
@@ -41,7 +62,11 @@ class RegisterView(generics.CreateAPIView):
         # Принимает данные, валидирует, создаёт пользователя, возвращает 201
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        user = serializer.save()
+
+        # Фиксируем регистрацию в журнале аудита (кто зарегистрировался)
+        log_action(user, 'user.registered', obj=user, details={'username': user.username})
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -418,6 +443,280 @@ class OwnerStatsAPIView(generics.GenericAPIView):
         })
 
 
+# Журнал операций текущего пользователя (GET)
+# Собирает в одну timeline все события: аренды, отзывы, жалобы.
+# Нужен для «журнала операций» в личном кабинете.
+class UserOperationsAPIView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        operations = []
+
+        # Аренды, где пользователь — арендатор или владелец машины
+        for rental in Rental.objects.filter(Q(renter=user) | Q(car__owner=user)):
+            operations.append({
+                'id': rental.id,
+                'type': 'rental',
+                'status': rental.status,
+                'amount': str(rental.total_price),
+                'car': f'{rental.car.brand} {rental.car.model_name}',
+                'date': rental.created_date.isoformat(),
+            })
+
+        # Отзывы, написанные пользователем
+        for feedback in Feedback.objects.filter(author=user):
+            operations.append({
+                'id': feedback.id,
+                'type': 'feedback',
+                'status': 'completed',
+                'rating': feedback.rating,
+                'comment': feedback.comment,
+                'date': feedback.created_date.isoformat(),
+            })
+
+        # Жалобы, поданные пользователем
+        for complaint in Complaint.objects.filter(author=user):
+            operations.append({
+                'id': complaint.id,
+                'type': 'complaint',
+                'status': complaint.status,
+                'reason': complaint.reason,
+                'date': complaint.created_date.isoformat(),
+            })
+
+        # Сортируем от новых к старым и ограничиваем (защита от огромного ответа)
+        operations.sort(key=lambda x: x['date'], reverse=True)
+        return Response(operations[:200])
+
+
+# Аналитика для личного кабинета пользователя (GET)
+# - renters: распределение своих аренд по статусам
+# - owners: дополнительно доход по месяцам и машины по брендам
+class AnalyticsAPIView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        rentals = Rental.objects.filter(Q(renter=user) | Q(car__owner=user))
+
+        response_data = {
+            # Сколько аренд в каждом статусе (pending/confirmed/active/...)
+            'rentals_by_status': list(
+                rentals.values('status').annotate(count=Count('id')).order_by('status')
+            ),
+            'feedbacks_written': Feedback.objects.filter(author=user).count(),
+            'rentals_total': rentals.count(),
+        }
+
+        # Для владельцев — данные дашборда
+        if user.is_owner:
+            completed = rentals.filter(status='completed')
+
+            monthly = completed.annotate(
+                month=TruncMonth('created_date')
+            ).values('month').annotate(
+                revenue=Sum('total_price'),
+                count=Count('id'),
+            ).order_by('month')
+
+            response_data['revenue_by_month'] = [
+                {
+                    'month': m['month'].strftime('%Y-%m') if m['month'] else None,
+                    'revenue': float(m['revenue'] or 0),
+                    'count': m['count'],
+                } for m in monthly
+            ]
+            response_data['revenue_total'] = float(
+                completed.aggregate(Sum('total_price'))['total_price__sum'] or 0
+            )
+            response_data['cars_by_brand'] = list(
+                user.cars.values('brand').annotate(count=Count('id')).order_by('-count')
+            )
+
+            # Сколько дней сдавалась каждая машина (без учёта цены).
+            # Считаем аренды ТОЛЬКО машин владельца; отменённые (canceled) не в счёт.
+            response_data['cars_rental_days'] = _rental_days_by_car(
+                Rental.objects.filter(car__owner=user)
+            )
+
+        return Response(response_data)
+
+
+# Список всех пользователей (GET — только staff, поиск + фильтры)
+# Для дашборда админа во фронтенде.
+class AdminUserListAPIView(generics.ListAPIView):
+    serializer_class = AdminUserSerializer
+    permission_classes = [permissions.IsAdminUser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['is_owner', 'is_renter', 'is_active', 'is_verified', 'is_staff']
+    search_fields = ['username', 'email', 'phone_number']
+
+    def get_queryset(self):
+        return User.objects.all().order_by('-created_date')
+
+
+# Детальная страница пользователя (GET/PATCH — только staff)
+# Через PATCH админ может: заблокировать (is_active=False), верифицировать
+# (is_verified=True), назначить роли (is_owner/is_renter).
+class AdminUserDetailAPIView(generics.RetrieveUpdateAPIView):
+    serializer_class = AdminUserSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_queryset(self):
+        return User.objects.all()
+
+    def perform_update(self, serializer):
+        # Защита: суперпользователя может менять только другой суперпользователь
+        user = self.get_object()
+        if user.is_superuser and not self.request.user.is_superuser:
+            raise PermissionDenied('Нельзя изменять суперпользователя')
+
+        # Запоминаем состояние ДО изменения, чтобы понять, что именно поменялось
+        old = {
+            'is_active': user.is_active,
+            'is_verified': user.is_verified,
+            'is_owner': user.is_owner,
+            'is_renter': user.is_renter,
+        }
+
+        serializer.save()
+        user.refresh_from_db()
+
+        # Записываем в аудит только реально изменившиеся поля
+        if old['is_active'] and not user.is_active:
+            log_action(self.request.user, 'user.blocked', obj=user,
+                       details={'label': 'Пользователь заблокирован', 'username': user.username})
+        elif not old['is_active'] and user.is_active:
+            log_action(self.request.user, 'user.unblocked', obj=user,
+                       details={'label': 'Пользователь разблокирован', 'username': user.username})
+
+        if not old['is_verified'] and user.is_verified:
+            log_action(self.request.user, 'user.verified', obj=user,
+                       details={'label': 'Личность подтверждена', 'username': user.username})
+
+        if not old['is_owner'] and user.is_owner:
+            log_action(self.request.user, 'user.role_owner', obj=user,
+                       details={'label': 'Выдана роль владельца', 'username': user.username})
+        elif old['is_owner'] and not user.is_owner:
+            log_action(self.request.user, 'user.role_owner_removed', obj=user,
+                       details={'label': 'Роль владельца снята', 'username': user.username})
+
+        if not old['is_renter'] and user.is_renter:
+            log_action(self.request.user, 'user.role_renter', obj=user,
+                       details={'label': 'Выдана роль арендатора', 'username': user.username})
+        elif old['is_renter'] and not user.is_renter:
+            log_action(self.request.user, 'user.role_renter_removed', obj=user,
+                       details={'label': 'Роль арендатора снята', 'username': user.username})
+
+
+# Журнал аудита действий (GET — только staff)
+# Для дашборда админа: кто, что и когда делал (блокировки, роли, жалобы...).
+class AdminAuditLogAPIView(generics.ListAPIView):
+    serializer_class = AuditLogSerializer
+    permission_classes = [permissions.IsAdminUser]
+    pagination_class = AuditLogPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['action', 'user', 'model_name']
+    search_fields = ['action', 'model_name', 'user__username']
+
+    def get_queryset(self):
+        return AuditLog.objects.all()
+
+
+# Аналитика всей платформы (GET — только staff)
+# Для дашборда админа: KPI + активность платформы.
+# ВАЖНО: НЕ содержит никаких финансовых данных (суммы, доход пользователей) —
+# это маркетплейс, доходы каждого владельца анонимны. См. /analytics/ для
+# персональной статистики.
+class AdminAnalyticsAPIView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request, *args, **kwargs):
+        # Активность по месяцам (число аренд, БЕЗ сумм)
+        monthly = Rental.objects.annotate(
+            month=TruncMonth('created_date')
+        ).values('month').annotate(
+            count=Count('id'),
+        ).order_by('month')
+
+        # Топ машин по числу дней аренды на всей платформе (без учёта цены)
+        all_cars_days = _rental_days_by_car(Rental.objects.all())
+
+        return Response({
+            # KPI-карточки
+            'users_total': User.objects.count(),
+            'cars_total': Car.objects.count(),
+            'rentals_total': Rental.objects.count(),
+            'active_rentals': Rental.objects.filter(status='active').count(),
+            'pending_rentals': Rental.objects.filter(status='pending').count(),
+            'feedbacks_total': Feedback.objects.count(),
+            'pending_complaints': Complaint.objects.filter(status='pending').count(),
+            # Графики (только активность, без денег)
+            'rentals_by_month': [
+                {
+                    'month': m['month'].strftime('%Y-%m') if m['month'] else None,
+                    'count': m['count'],
+                } for m in monthly
+            ],
+            'cars_by_brand': list(
+                Car.objects.values('brand').annotate(count=Count('id')).order_by('-count')
+            ),
+            'rental_statuses': list(
+                Rental.objects.values('status').annotate(count=Count('id')).order_by('status')
+            ),
+            # Сдаваемость машин (без учёта цены)
+            'top_cars_by_days': all_cars_days[:5],
+            'rental_days_total': sum(e['rental_days'] for e in all_cars_days),
+        })
+
+
+# Журнал всех операций платформы (GET — только staff)
+# В отличие от UserOperationsAPIView включает данные о пользователях.
+# ВАЖНО: НЕ содержит сумм (amount) — финансы пользователей анонимны.
+class AdminOperationsAPIView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request, *args, **kwargs):
+        operations = []
+
+        for rental in Rental.objects.all():
+            operations.append({
+                'id': rental.id,
+                'type': 'rental',
+                'status': rental.status,
+                'car': f'{rental.car.brand} {rental.car.model_name}',
+                'renter': rental.renter.username,
+                'owner': rental.car.owner.username,
+                'date': rental.created_date.isoformat(),
+            })
+
+        for feedback in Feedback.objects.all():
+            operations.append({
+                'id': feedback.id,
+                'type': 'feedback',
+                'status': 'completed',
+                'rating': feedback.rating,
+                'comment': feedback.comment,
+                'author': feedback.author.username,
+                'date': feedback.created_date.isoformat(),
+            })
+
+        for complaint in Complaint.objects.all():
+            operations.append({
+                'id': complaint.id,
+                'type': 'complaint',
+                'status': complaint.status,
+                'reason': complaint.reason,
+                'author': complaint.author.username,
+                'target_user': complaint.target_user.username,
+                'date': complaint.created_date.isoformat(),
+            })
+
+        operations.sort(key=lambda x: x['date'], reverse=True)
+        return Response(operations[:200])
+
+
 # Избранное (GET — список, POST — добавить)
 class FavoriteListAPIView(generics.ListCreateAPIView):
     serializer_class = FavoriteSerializer
@@ -508,10 +807,40 @@ class ComplaintDetailAPIView(generics.RetrieveUpdateAPIView):
     serializer_class = ComplaintSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_serializer_class(self):
+        # Для админа status и admin_response доступны на запись
+        # (у обычного пользователя они read_only)
+        if self.request.user.is_staff:
+            return AdminComplaintSerializer
+        return ComplaintSerializer
+
     def get_queryset(self):
         if self.request.user.is_staff:
             return Complaint.objects.all()
         return Complaint.objects.filter(author=self.request.user)
+
+    def perform_update(self, serializer):
+        complaint = self.get_object()
+        old_status = complaint.status
+        old_response = complaint.admin_response
+
+        serializer.save()
+        complaint.refresh_from_db()
+
+        # Записываем в аудит смену статуса жалобы
+        if complaint.status != old_status:
+            log_action(self.request.user, 'complaint.status_changed', obj=complaint,
+                       details={
+                           'label': 'Статус жалобы изменён',
+                           'from': old_status,
+                           'to': complaint.status,
+                           'reason': complaint.reason,
+                       })
+
+        # Записываем в аудит ответ администратора
+        if complaint.admin_response != old_response and complaint.admin_response:
+            log_action(self.request.user, 'complaint.response', obj=complaint,
+                       details={'label': 'Ответ администратора', 'response': complaint.admin_response})
 
 
 # Отправка кода верификации на email/телефон (POST)

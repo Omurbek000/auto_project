@@ -25,6 +25,26 @@ def send_email(subject, message, recipient_list):
         return False
 
 
+# Запись действия в журнал аудита (AuditLog).
+# Вызывается из views при важных событиях: регистрация, блокировка/верификация
+# пользователя, смена ролей, изменение статуса жалобы, ответ админа.
+# Аргументы:
+#   user    — кто совершил действие (может быть None)
+#   action  — строковый код действия, например 'user.blocked'
+#   obj     — объект, над которым совершено действие (необязательно)
+#   details — словарь с доп. информацией (например {'from': 'pending', 'to': 'resolved'})
+def log_action(user, action, obj=None, details=None):
+    from .models import AuditLog  # локальный импорт — чтобы не было циклической зависимости
+
+    return AuditLog.objects.create(
+        user=user,
+        action=action,
+        model_name=obj.__class__.__name__ if obj else '',
+        object_id=obj.pk if obj else None,
+        details=details or {},
+    )
+
+
 # Отправка SMS. Если Twilio не настроен — выводит в консоль
 def send_sms(phone_number, message):
     if not phone_number:

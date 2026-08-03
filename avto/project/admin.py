@@ -2,13 +2,10 @@
 # Регистрируем модели, чтобы ими можно было управлять через веб-интерфейс
 
 from django.contrib import admin
-from django.db.models import Sum, Count, Avg
-from django.utils import timezone
-from datetime import timedelta
 
 # Явные импорты вместо `from .models import *`
 # (wildcard-импорт тащит всё подряд и мешает понимать, что реально используется)
-from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode
+from .models import User, Car, CarImage, CarUnavailableDate, Rental, Feedback, Favorite, Chat, ChatMessage, Complaint, VerificationCode, AuditLog
 
 
 @admin.register(User)
@@ -89,52 +86,22 @@ class VerificationCodeAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'code')
 
 
-# Дашборд для админа — страница /admin/dashboard/
-# Показывает сводку по платформе: статистику, топ машин, доход
-from django.template.response import TemplateResponse
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    # Журнал аудита — только просмотр (записи создаются автоматически)
+    list_display = ('user', 'action', 'model_name', 'object_id', 'created_date')
+    list_filter = ('action', 'created_date')
+    search_fields = ('user__username', 'action', 'model_name')
+    readonly_fields = ('user', 'action', 'model_name', 'object_id', 'details', 'created_date')
 
+    def has_add_permission(self, request):
+        return False
 
-def dashboard_view(request):
-    # Админ-дашборд: сводка по всей платформе для администратора.
-    # Считает количество сущностей, доход за 30 дней и топ-5 машин по числу аренд.
-    # Данные передаются в шаблон templates/admin/dashboard.html
-    today = timezone.now()
-    month_ago = today - timedelta(days=30)
+    def has_change_permission(self, request, obj=None):
+        return False
 
-    # Базовые счётчики платформы
-    total_users = User.objects.count()
-    total_cars = Car.objects.count()
-    total_rentals = Rental.objects.count()
-    active_rentals = Rental.objects.filter(status='active').count()
-    pending_rentals = Rental.objects.filter(status='pending').count()
-    total_feedbacks = Feedback.objects.count()
-    pending_complaints = Complaint.objects.filter(status='pending').count()
-
-    # Доход за последние 30 дней — только завершённые аренды
-    monthly_revenue = Rental.objects.filter(
-        status='completed',
-        created_date__gte=month_ago
-    ).aggregate(Sum('total_price'))['total_price__sum'] or 0
-
-    # Топ-5 самых популярных машин (считаем количество аренд через annotate)
-    popular_cars = Car.objects.annotate(
-        rental_count=Count('rentals')
-    ).order_by('-rental_count')[:5]
-
-    context = {
-        'title': 'Дашборд',
-        'total_users': total_users,
-        'total_cars': total_cars,
-        'total_rentals': total_rentals,
-        'active_rentals': active_rentals,
-        'pending_rentals': pending_rentals,
-        'total_feedbacks': total_feedbacks,
-        'pending_complaints': pending_complaints,
-        'monthly_revenue': monthly_revenue,
-        'popular_cars': popular_cars,
-        'is_nav_sidebar_enabled': True,
-    }
-    return TemplateResponse(request, 'admin/dashboard.html', context)
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 admin.site.index_title = 'Avto Admin'

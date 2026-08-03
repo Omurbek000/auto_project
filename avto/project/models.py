@@ -286,3 +286,24 @@ class VerificationCode(models.Model):
 
     class Meta:
         ordering = ['-created_date']
+
+
+# Журнал аудита. Лог «кто, что и когда сделал» — для дашборда админа.
+# Заполняется через log_action() в services.py при важных действиях:
+# регистрация, блокировка/верификация пользователя, смена ролей,
+# изменение статуса жалобы, ответ админа.
+class AuditLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='audit_logs')                       # Кто совершил действие
+    action = models.CharField(max_length=100)                                 # Действие, например user.blocked
+    model_name = models.CharField(max_length=50)                               # Имя модели, например User
+    object_id = models.PositiveIntegerField(null=True, blank=True)             # ID объекта
+    details = models.JSONField(default=dict, blank=True)                       # Доп. информация (изменения)
+    created_date = models.DateTimeField(auto_now_add=True)                     # Когда произошло
+
+    def __str__(self):
+        username = self.user.username if self.user else 'System'
+        return f"{username} - {self.action} ({self.created_date:%Y-%m-%d %H:%M})"
+
+    class Meta:
+        ordering = ['-created_date']  # Новые действия сверху

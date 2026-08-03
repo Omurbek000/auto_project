@@ -21,6 +21,9 @@ from .views import (
     ComplaintListAPIView, ComplaintDetailAPIView,
     PasswordResetRequestAPIView, PasswordResetConfirmAPIView,
     StatsAPIView, OwnerStatsAPIView,
+    UserOperationsAPIView, AnalyticsAPIView,
+    AdminUserListAPIView, AdminUserDetailAPIView,
+    AdminAnalyticsAPIView, AdminOperationsAPIView, AdminAuditLogAPIView,
 )
 
 # Router для ViewSet (один класс — несколько эндпоинтов)
@@ -84,4 +87,15 @@ urlpatterns = [
     # Статистика
     path('stats/', StatsAPIView.as_view(), name='stats'),
     path('owner/stats/', OwnerStatsAPIView.as_view(), name='owner_stats'),
+
+    # Личный кабинет: журнал операций и аналитика
+    path('operations/', UserOperationsAPIView.as_view(), name='operations'),
+    path('analytics/', AnalyticsAPIView.as_view(), name='analytics'),
+
+    # Админ-панель для фронтенда (только staff)
+    path('admin/users/', AdminUserListAPIView.as_view(), name='admin_users_list'),
+    path('admin/users/<int:pk>/', AdminUserDetailAPIView.as_view(), name='admin_users_detail'),
+    path('admin/analytics/', AdminAnalyticsAPIView.as_view(), name='admin_analytics'),
+    path('admin/operations/', AdminOperationsAPIView.as_view(), name='admin_operations'),
+    path('admin/audit/', AdminAuditLogAPIView.as_view(), name='admin_audit'),
 ]
