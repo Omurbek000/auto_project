@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AVTO — Презентации</title>
+<style>
+  :root{
+    --bg1:#0a0a1a; --bg2:#1a1a2e;
+    --a1:#6C63FF; --a2:#4F8CFF;
+    --glass:rgba(255,255,255,.05); --edge:rgba(255,255,255,.1);
+    --txt:#fff; --txt2:rgba(255,255,255,.72); --txt3:rgba(255,255,255,.45);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:Inter,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:radial-gradient(1200px 700px at 85% -10%,rgba(108,99,255,.18),transparent 60%),
+               radial-gradient(1000px 600px at 0% 110%,rgba(79,140,255,.16),transparent 60%),
+               linear-gradient(135deg,var(--bg1),var(--bg2));
+    color:var(--txt);overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .orb{position:fixed;border-radius:50%;filter:blur(70px);opacity:.5;z-index:0;pointer-events:none}
+  .orb1{width:420px;height:420px;background:var(--a1);top:-140px;right:-120px;animation:float 16s ease-in-out infinite}
+  .orb2{width:360px;height:360px;background:var(--a2);bottom:-120px;left:-100px;animation:float 20s ease-in-out infinite reverse}
+  .orb3{width:220px;height:220px;background:#7b6bff;top:45%;left:55%;opacity:.35;animation:float 24s ease-in-out infinite}
+  @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,40px)}}
+
+  .menu{position:relative;z-index:1;width:100%;max-width:880px;padding:24px;text-align:center}
+  .kicker{color:var(--a2);text-transform:uppercase;letter-spacing:.22em;font-size:12px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:10px}
+  .kicker::before{content:"";width:26px;height:2px;background:linear-gradient(90deg,var(--a1),var(--a2))}
+  .kicker::after{content:"";width:26px;height:2px;background:linear-gradient(90deg,var(--a2),var(--a1))}
+  .logo{font-weight:800;letter-spacing:.06em;font-size:clamp(48px,10vw,90px);margin-bottom:6px}
+  .logo span{color:var(--a2)}
+  h1{font-size:clamp(26px,4vw,40px);font-weight:800;letter-spacing:-.02em;margin-bottom:10px}
+  .grad{background:linear-gradient(90deg,var(--a1),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--txt2);font-size:15px;line-height:1.6;max-width:52ch;margin:0 auto 36px}
+
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .pbtn{
+    display:flex;flex-direction:column;align-items:flex-start;gap:14px;text-align:left;
+    padding:30px 28px;border-radius:20px;text-decoration:none;
+    background:var(--glass);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    border:1px solid var(--edge);color:var(--txt);
+    transition:transform .25s ease,border-color .25s ease,box-shadow .25s ease;
+    animation:rise .7s ease backwards;
+  }
+  .pbtn:nth-child(1){animation-delay:.15s}
+  .pbtn:nth-child(2){animation-delay:.3s}
+  @keyframes rise{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+  .pbtn:hover{transform:translateY(-6px);box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .pbtn.bk{border-top:3px solid var(--a1)}
+  .pbtn.fe{border-top:3px solid var(--a2)}
+  .pbtn:hover.bk{border-color:var(--a1);box-shadow:0 24px 60px rgba(108,99,255,.25)}
+  .pbtn:hover.fe{border-color:var(--a2);box-shadow:0 24px 60px rgba(79,140,255,.25)}
+  .pbtn .ic{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;flex:none;
+            background:linear-gradient(135deg,rgba(108,99,255,.25),rgba(79,140,255,.25));border:1px solid var(--edge);color:#cfc9ff}
+  .pbtn h2{font-size:22px;font-weight:800;letter-spacing:-.01em}
+  .pbtn p{color:var(--txt2);font-size:14px;line-height:1.55}
+  .pbtn .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
+  .chip{display:inline-flex;align-items:center;padding:5px 11px;border-radius:999px;font-size:12px;font-weight:600;
+        background:rgba(255,255,255,.06);border:1px solid var(--edge);color:var(--txt2)}
+  .go{display:inline-flex;align-items:center;gap:8px;margin-top:4px;font-size:14px;font-weight:700;color:var(--a2)}
+  .go svg{transition:transform .2s}
+  .pbtn:hover .go svg{transform:translateX(4px)}
+
+  .foot{position:fixed;bottom:22px;left:0;right:0;z-index:1;font-size:12px;color:var(--txt3);text-align:center}
+
+  @media(max-width:640px){
+    .btns{grid-template-columns:1fr}
+    .menu{padding:16px;max-width:420px}
+    .pbtn{padding:22px 20px}
+  }
+</style>
+</head>
+<body>
+<div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div>
+
+<div class="menu">
+  <div class="kicker">Проект</div>
+  <div class="logo">AVTO<span>.</span></div>
+  <h1><span class="grad">Презентации</span></h1>
+  <p class="sub">Платформа аренды автомобилей. Выберите, какую часть проекта показать.</p>
+
+  <div class="btns">
+    <a class="pbtn bk" href="presentation.html">
+      <div class="ic">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#cfc9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+      </div>
+      <h2>Бекенд</h2>
+      <p>Django 5.2 + DRF + JWT. Модели, эндпоинты, защита от двойного бронирования, админка, аудит и 128 автотестов.</p>
+      <div class="chips">
+        <span class="chip">Django 5.2</span>
+        <span class="chip">DRF</span>
+        <span class="chip">JWT</span>
+        <span class="chip">SQLite</span>
+      </div>
+      <span class="go">Смотреть
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </span>
+    </a>
+
+    <a class="pbtn fe" href="presentation_frontend.html">
+      <div class="ic">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#cfc9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      </div>
+      <h2>Фронтенд</h2>
+      <p>React + TypeScript + Vite. Каталог с фильтрами, календарь брони, чат, лайтбокс фото, тёмный glass-дизайн и адаптив.</p>
+      <div class="chips">
+        <span class="chip">React 18</span>
+        <span class="chip">TypeScript</span>
+        <span class="chip">Vite</span>
+        <span class="chip">TanStack Query</span>
+      </div>
+      <span class="go">Смотреть
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </span>
+    </a>
+  </div>
+</div>
+
+<div class="foot">AVTO · Car Rental Platform · 2026 — Django + React</div>
+</body>
+</html>

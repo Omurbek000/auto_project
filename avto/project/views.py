@@ -98,13 +98,12 @@ class LogoutView(generics.GenericAPIView):
 
 
 # Профиль пользователя (GET — получить свои данные)
-class UserProfileListAPIView(generics.ListAPIView):
-    queryset = User.objects.all()
+class UserProfileListAPIView(generics.GenericAPIView):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        return User.objects.filter(id=self.request.user.id)
+    def get(self, request):
+        return Response(self.get_serializer(request.user).data)
 
 
 # Профиль пользователя (GET/PUT/PATCH/DELETE — редактирование)
@@ -148,6 +147,7 @@ class CarDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
 class CarOwnerListAPIView(generics.ListAPIView):
     serializer_class = CarListSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CarPagination
 
     def get_queryset(self):
         return Car.objects.filter(owner=self.request.user)
@@ -163,7 +163,11 @@ class CarImageUploadAPIView(generics.CreateAPIView):
         car_id = self.request.data.get('car_id')
         try:
             car = Car.objects.get(id=car_id, owner=self.request.user)
-            serializer.save(car=car)
+            # Если у машины нет ни одного фото — первое становится основным
+            if not car.images.exists() and not car.image:
+                serializer.save(car=car, is_main=True)
+            else:
+                serializer.save(car=car)
         except Car.DoesNotExist:
             raise ValidationError({'detail': 'Автомобиль не найден или вы не владелец'})
 
@@ -179,6 +183,24 @@ class CarImageBulkUploadAPIView(generics.CreateAPIView):
         images = serializer.save()
         result_serializer = CarImageSerializer(images, many=True)
         return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# Сделать фото основным (POST) — только для своих машин
+class CarImageSetMainAPIView(generics.GenericAPIView):
+    serializer_class = CarImageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            image = CarImage.objects.get(pk=pk, car__owner=request.user)
+        except CarImage.DoesNotExist:
+            raise ValidationError({'detail': 'Фото не найдено или вы не владелец'})
+
+        # Сбрасываем флаг is_main у остальных фото машины
+        CarImage.objects.filter(car=image.car).update(is_main=False)
+        image.is_main = True
+        image.save()
+        return Response(CarImageSerializer(image).data, status=status.HTTP_200_OK)
 
 
 # Управление заблокированными датами (владелец вручную блокирует дни)
@@ -418,12 +440,12 @@ class CarAvailableAPIView(generics.ListAPIView):
 class StatsAPIView(generics.GenericAPIView):
     def get(self, request, *args, **kwargs):
         return Response({
-            'cars_total': Car.objects.count(),
+            'total_cars': Car.objects.count(),
             'cars_available': Car.objects.filter(is_available=True).count(),
-            'rentals_active': Rental.objects.filter(status='active').count(),
-            'rentals_total': Rental.objects.count(),
+            'active_rentals': Rental.objects.filter(status='active').count(),
+            'total_rentals': Rental.objects.count(),
             'feedbacks_total': Feedback.objects.count(),
-            'users_total': User.objects.count(),
+            'total_users': User.objects.count(),
         })
 
 
@@ -489,7 +511,7 @@ class UserOperationsAPIView(generics.ListAPIView):
                 'type': 'rental',
                 'status': rental.status,
                 'amount': str(rental.total_price),
-                'car': f'{rental.car.brand} {rental.car.model_name}',
+                'description': f'{rental.car.brand} {rental.car.model_name}',
                 'date': rental.created_date.isoformat(),
             })
 
@@ -500,7 +522,7 @@ class UserOperationsAPIView(generics.ListAPIView):
                 'type': 'feedback',
                 'status': 'completed',
                 'rating': feedback.rating,
-                'comment': feedback.comment,
+                'description': feedback.comment,
                 'date': feedback.created_date.isoformat(),
             })
 
@@ -510,7 +532,7 @@ class UserOperationsAPIView(generics.ListAPIView):
                 'id': complaint.id,
                 'type': 'complaint',
                 'status': complaint.status,
-                'reason': complaint.reason,
+                'description': complaint.reason,
                 'date': complaint.created_date.isoformat(),
             })
 
@@ -581,6 +603,7 @@ class AdminUserListAPIView(generics.ListAPIView):
     filter_backends = [DjangoFilterBackend, SearchFilter]
     filterset_fields = ['is_owner', 'is_renter', 'is_active', 'is_verified', 'is_staff']
     search_fields = ['username', 'email', 'phone_number']
+    pagination_class = CarPagination
 
     def get_queryset(self):
         return User.objects.all().order_by('-created_date')
@@ -675,9 +698,9 @@ class AdminAnalyticsAPIView(generics.GenericAPIView):
 
         return Response({
             # KPI-карточки
-            'users_total': User.objects.count(),
-            'cars_total': Car.objects.count(),
-            'rentals_total': Rental.objects.count(),
+            'total_users': User.objects.count(),
+            'total_cars': Car.objects.count(),
+            'total_rentals': Rental.objects.count(),
             'active_rentals': Rental.objects.filter(status='active').count(),
             'pending_rentals': Rental.objects.filter(status='pending').count(),
             'feedbacks_total': Feedback.objects.count(),
@@ -716,9 +739,8 @@ class AdminOperationsAPIView(generics.ListAPIView):
                 'id': rental.id,
                 'type': 'rental',
                 'status': rental.status,
-                'car': f'{rental.car.brand} {rental.car.model_name}',
-                'renter': rental.renter.username,
-                'owner': rental.car.owner.username,
+                'username': rental.renter.username,
+                'description': f'{rental.car.brand} {rental.car.model_name}',
                 'date': rental.created_date.isoformat(),
             })
 
@@ -727,9 +749,8 @@ class AdminOperationsAPIView(generics.ListAPIView):
                 'id': feedback.id,
                 'type': 'feedback',
                 'status': 'completed',
-                'rating': feedback.rating,
-                'comment': feedback.comment,
-                'author': feedback.author.username,
+                'username': feedback.author.username,
+                'description': feedback.comment,
                 'date': feedback.created_date.isoformat(),
             })
 
@@ -738,9 +759,8 @@ class AdminOperationsAPIView(generics.ListAPIView):
                 'id': complaint.id,
                 'type': 'complaint',
                 'status': complaint.status,
-                'reason': complaint.reason,
-                'author': complaint.author.username,
-                'target_user': complaint.target_user.username,
+                'username': complaint.author.username,
+                'description': complaint.reason,
                 'date': complaint.created_date.isoformat(),
             })
 
@@ -753,6 +773,7 @@ class AdminOperationsAPIView(generics.ListAPIView):
 class FavoriteListAPIView(generics.ListCreateAPIView):
     serializer_class = FavoriteSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CarPagination
 
     def get_queryset(self):
         return Favorite.objects.filter(user=self.request.user)

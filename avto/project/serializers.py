@@ -123,9 +123,11 @@ class CarImageBulkUploadSerializer(serializers.Serializer):
         files = self.context['request'].FILES.getlist('images')
         if not files:
             raise serializers.ValidationError({'images': 'Не загружено ни одного файла'})
+        # Если у машины ещё нет фото — первое загруженное станет основным
+        first_is_main = not car.images.exists() and not car.image
         images = []
-        for f in files:
-            images.append(CarImage.objects.create(car=car, image=f))
+        for i, f in enumerate(files):
+            images.append(CarImage.objects.create(car=car, image=f, is_main=(first_is_main and i == 0)))
         return images
 
 
@@ -133,7 +135,7 @@ class CarImageBulkUploadSerializer(serializers.Serializer):
 class CarImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = CarImage
-        fields = ['id', 'image', 'created_date']
+        fields = ['id', 'image', 'is_main', 'created_date']
 
 
 # Сериализатор заблокированных дат (владелец вручную блокирует дни)
@@ -155,6 +157,19 @@ class CarListSerializer(serializers.ModelSerializer):
     average_rating = serializers.ReadOnlyField()                                        # Средний рейтинг
     feedbacks_count = serializers.ReadOnlyField()                                       # Количество отзывов
     images = CarImageSerializer(many=True, read_only=True)                              # Доп. фото
+    image = serializers.SerializerMethodField()                                         # Основное фото (is_main → car.image → первое)
+
+    def get_image(self, obj):
+        request = self.context.get('request')
+        main = obj.images.filter(is_main=True).first()
+        if main:
+            return request.build_absolute_uri(main.image.url) if request else main.image.url
+        if obj.image:
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        first = obj.images.first()
+        if first:
+            return request.build_absolute_uri(first.image.url) if request else first.image.url
+        return None
 
     class Meta:
         model = Car
@@ -174,6 +189,19 @@ class CarDetailSerializer(serializers.ModelSerializer):
     feedbacks_count = serializers.ReadOnlyField()
     images = CarImageSerializer(many=True, read_only=True)
     unavailable_dates = CarUnavailableDateSerializer(many=True, read_only=True)  # Заблокированные даты
+    image = serializers.SerializerMethodField()  # Основное фото (is_main → car.image → первое)
+
+    def get_image(self, obj):
+        request = self.context.get('request')
+        main = obj.images.filter(is_main=True).first()
+        if main:
+            return request.build_absolute_uri(main.image.url) if request else main.image.url
+        if obj.image:
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        first = obj.images.first()
+        if first:
+            return request.build_absolute_uri(first.image.url) if request else first.image.url
+        return None
 
     class Meta:
         model = Car

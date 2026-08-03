@@ -253,7 +253,7 @@ class UserProfileAPITests(APITestCase):
         response = self.client.get(reverse('users_list'),
                                    HTTP_AUTHORIZATION=f'Bearer {self.tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data[0]['username'], 'testuser')
+        self.assertEqual(response.data['username'], 'testuser')
 
     def test_get_profile_unauthorized(self):
         response = self.client.get(reverse('users_list'))
@@ -316,7 +316,7 @@ class CarAPITests(APITestCase):
         response = self.client.get(reverse('car_owner_list'),
                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data['results']), 1)
 
     def test_update_own_car(self):
         response = self.client.patch(f'/car/{self.car.id}/', {'price_per_day': 100},
@@ -402,6 +402,37 @@ class CarImageAPITests(APITestCase):
                                     format='multipart')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(len(response.data), 2)
+
+    def test_first_upload_becomes_main(self):
+        # Первое загруженное фото автоматически становится основным (is_main=True)
+        img = create_test_image()
+        response = self.client.post(reverse('car_image_upload'),
+                                    {'car_id': self.car.id, 'image': img},
+                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}',
+                                    format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(CarImage.objects.get(id=response.data['id']).is_main)
+
+    def test_set_main_image(self):
+        img1 = CarImage.objects.create(car=self.car, image=create_test_image())
+        img2 = CarImage.objects.create(car=self.car, image=create_test_image())
+        # Делаем второе фото основным — флаг должен перейти с первого на второе
+        response = self.client.post(f'/car/image/{img2.id}/set-main/',
+                                    HTTP_AUTHORIZATION=f'Bearer {self.owner_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['is_main'])
+        img1.refresh_from_db()
+        img2.refresh_from_db()
+        self.assertFalse(img1.is_main)
+        self.assertTrue(img2.is_main)
+
+    def test_set_main_image_not_owner(self):
+        other = User.objects.create_user(username='other2', password='pass123')
+        other_tokens = get_tokens(other)
+        img = CarImage.objects.create(car=self.car, image=create_test_image())
+        response = self.client.post(f'/car/image/{img.id}/set-main/',
+                                    HTTP_AUTHORIZATION=f'Bearer {other_tokens["access"]}')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_delete_image(self):
         car_image = CarImage.objects.create(car=self.car, image=create_test_image())
@@ -840,7 +871,7 @@ class FavoriteAPITests(APITestCase):
         response = self.client.get(reverse('favorites_list'),
                                    HTTP_AUTHORIZATION=f'Bearer {self.tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data['results']), 1)
 
     def test_delete_favorite(self):
         fav = Favorite.objects.create(user=self.user, car=self.car)
@@ -1148,8 +1179,8 @@ class StatsAPITests(APITestCase):
     def test_global_stats(self):
         response = self.client.get(reverse('stats'))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('cars_total', response.data)
-        self.assertIn('users_total', response.data)
+        self.assertIn('total_cars', response.data)
+        self.assertIn('total_users', response.data)
 
     def test_owner_stats(self):
         owner = User.objects.create_user(username='owner', password='pass123', is_owner=True)
@@ -1208,7 +1239,7 @@ class AdminUserAPITests(APITestCase):
         response = self.client.get(reverse('admin_users_list'),
                                    HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 2)
+        self.assertEqual(len(response.data['results']), 2)
 
     def test_admin_users_forbidden_for_regular_user(self):
         user_tokens = get_tokens(self.user)
@@ -1367,8 +1398,8 @@ class OperationsAPITests(APITestCase):
                                    HTTP_AUTHORIZATION=f'Bearer {self.admin_tokens["access"]}')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['count'], 1)
-        self.assertEqual(response.data['results'][0]['renter'], 'renter')
-        self.assertEqual(response.data['results'][0]['owner'], 'owner')
+        self.assertEqual(response.data['results'][0]['username'], 'renter')
+        self.assertEqual(response.data['results'][0]['description'], 'Toyota Camry')
         # Админ не должен видеть суммы операций (финансы пользователей анонимны)
         self.assertNotIn('amount', response.data['results'][0])
 

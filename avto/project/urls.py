@@ -11,7 +11,7 @@ from .views import (
     SendVerificationCodeAPIView, ConfirmVerificationCodeAPIView,
     CarListAPIView, CarOwnerListAPIView, CarAvailableAPIView,
     CarDetailAPIView, CarUnavailableDateAPIView,
-    CarImageUploadAPIView, CarImageBulkUploadAPIView, CarImageDeleteAPIView,
+    CarImageUploadAPIView, CarImageBulkUploadAPIView, CarImageDeleteAPIView, CarImageSetMainAPIView,
     CarCalendarAPIView,
     FavoriteListAPIView, FavoriteDeleteAPIView,
     RentalListAPIView, RentalDetailAPIView,
@@ -55,6 +55,7 @@ urlpatterns = [
     path('car/<int:car_id>/unavailable/', CarUnavailableDateAPIView.as_view(), name='car_unavailable_dates'),
     path('car/image/upload/', CarImageUploadAPIView.as_view(), name='car_image_upload'),
     path('car/image/bulk-upload/', CarImageBulkUploadAPIView.as_view(), name='car_image_bulk_upload'),
+    path('car/image/<int:pk>/set-main/', CarImageSetMainAPIView.as_view(), name='car_image_set_main'),
     path('car/image/<int:pk>/', CarImageDeleteAPIView.as_view(), name='car_image_delete'),
 
     # Календарь доступности
